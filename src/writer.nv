@@ -147,10 +147,9 @@ pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
         return (w, bytes.from_str(""))
     if w.dialect.strict and w.width >= 0 and list.len(fields) != w.width
         return (w, bytes.from_str(""))
-    var quoted: [Str] = []
-    for f in fields
-        quoted = list.push(quoted, quote_field(w.dialect, f))
-    let text = str.join(quoted, str.from_char(w.dialect.delim)) + TERMINATOR
+    let d = w.dialect
+    let quoted = list.map(fields, f => quote_field(d, f))
+    let text = str.join(quoted, str.from_char(d.delim)) + TERMINATOR
     var settled = w.width
     if settled < 0
         settled = list.len(fields)

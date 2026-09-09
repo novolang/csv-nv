@@ -209,13 +209,11 @@ pub fn reader(d: Dialect) -> Reader
 // out of every run so that the line and column bookkeeping stays in
 // one place — the byte-at-a-time path.
 fn run_end(chunk: Str, from: Int, n: Int, stop1: Int, stop2: Int) -> Int
-    var j = from
-    while j < n
+    for j in from..n
         let c = str.byte_at_or(chunk, j, -1)
         if c == stop1 or c == stop2 or c == LF or c == CR
             return j
-        j = j + 1
-    j
+    n
 
 // One UNQUOTED field as it will be handed back: trimmed, if the
 // dialect says so.
@@ -335,9 +333,13 @@ pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
     var failed_col = -1
     var rows: [Row] = []
 
+    // Not a counted loop: the CR state hands its byte back unconsumed,
+    // so `i` advances at the FOOT of the body rather than at the head,
+    // and the first condition is the one that ends the scan early — a
+    // failure is sticky, and nothing after it is read.
     let n = str.len(chunk)
     var i = 0
-    while i < n and failed == F_NONE
+    while failed == F_NONE and i < n
         let b = str.byte_at_or(chunk, i, -1)
         // Whether this byte was consumed by this pass, and whether it
         // ended a record.  A byte the CR state hands back is looked at
@@ -675,14 +677,14 @@ const READ_CHUNK: Int = 65536
 // end of stream and an `Err` is a transport failure, and this stops on
 // the first empty read.  It ALSO stops, without an error, on
 // `IoClosed`: a source that reports itself closed is a source with no
-// more bytes, which is end of stream by another name, and the standard
-// library's own `impl Read[] for Buffer` reports an exhausted buffer
-// exactly that way (`bugs/stdlib/buffer-read-reports-end-of-stream-as-
-// ioclosed.md` in the toolchain).  Every other `IoError` — a timeout,
-// a broken pipe, a permission — is `Transport`, and the records read
-// before it are discarded rather than returned as a whole file: a
-// caller who wants the prefix of a stream that failed drives `feed`
-// and keeps what it handed back.
+// more bytes, which is end of stream by another name — and the
+// standard library's in-memory `Buffer` reports an exhausted buffer
+// exactly that way, so a reader that treated it as a failure could not
+// read a whole document out of memory.  Every other `IoError` — a
+// timeout, a broken pipe, a permission — is `Transport`, and the
+// records read before it are discarded rather than returned as a whole
+// file: a caller who wants the prefix of a stream that failed drives
+// `feed` and keeps what it handed back.
 //
 // ```novo
 // use reader

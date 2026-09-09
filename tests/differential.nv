@@ -30,11 +30,11 @@ fn show_row(row: Row) -> Str
 fn show_rows(name: Str, got: Result<[Row], CsvError>) [io]
     println("== ${name}")
     match got
-        Ok(rows)  =>
+        Ok(rows) =>
             println("    rows=${list.len(rows)}")
             for row in rows
                 println(show_row(row))
-        Err(e)    =>
+        Err(e)   =>
             println("    err=${e.message()}")
             println("    at=${csverror.line_of(e)}:${csverror.col_of(e)}")
 
