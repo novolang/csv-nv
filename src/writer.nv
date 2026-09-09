@@ -1,0 +1,169 @@
+// writer.nv — records to bytes, and the bytes go wherever the caller
+// puts them.
+//
+// A LIBRARY DOES NOT PRINT, and in a `core` package it also cannot:
+// the budget is no effects at all, so there is no version of this
+// module that takes a file.  `write_row` returns the bytes of one
+// record and the caller writes them — to a file, to a socket, into a
+// buffer, into a checksum.  That is the same constraint the reader has
+// and it produces the same shape from the other side.
+//
+// WHY IT IS A `Writer` AND NOT A FREE FUNCTION
+//
+// Two things have to be remembered between records and neither is in
+// the record: the dialect, and whether anything has been written yet.
+// The second is what decides a header — a writer that has emitted
+// nothing may still write one — and what a caller would otherwise
+// track with a boolean beside every call.  So the state is a value,
+// and like the reader it is threaded rather than mutated, because
+// `[mutate]` is a host effect.
+//
+// WHAT IT GUARANTEES
+//
+// `reader.parse(writer output, same dialect)` gives back the records
+// that went in.  That round trip is the only promise worth making
+// about a CSV writer and it is the one this package's tests are built
+// around: quoting is applied where the dialect requires it and nowhere
+// else, and a field holding the delimiter, the quote byte, a CR or an
+// LF is always quoted.
+
+use dialect
+
+// A CSV writer between records.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     let w = writer.writer(dialect.rfc4180())
+//     println("${w.rows}")                     // 0
+// ```
+pub struct Writer
+    // The dialect this writer was built with, unchanged.
+    dialect: Dialect
+    // How many records have been emitted, header included.  `0` is
+    // what makes `write_header` legal.
+    rows: Int
+    // The width the first record set, or `-1` before it.  Under a
+    // `strict` dialect a later record of a different width is refused;
+    // otherwise it is written as it stands.
+    width: Int
+
+// A writer that has emitted nothing.
+//
+// Like `reader.reader`, a dialect `dialect.check` refuses produces a
+// writer that emits nothing rather than a constructor that fails.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     let w = writer.writer(dialect.tsv())
+//     println("${w.width}")                    // -1
+// ```
+pub fn writer(d: Dialect) -> Writer
+    todo("csv-nv.writer")
+
+// The header record, as bytes.
+//
+// Legal only as the first thing a writer emits; afterwards it returns
+// empty bytes and leaves the writer alone, because a header in the
+// middle of a file is not a thing this package will produce.  It is a
+// separate call from `write_row` so that a caller round-tripping a
+// file can hand back the `Header` the reader gave them without
+// unpacking it.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     let w = writer.writer(dialect.rfc4180())
+//     let (_, out) = writer.write_header(w, Header { names: ["name", "age"] })
+//     println("${bytes.len(out)}")             // 10 — "name,age\r\n"
+// ```
+pub fn write_header(w: Writer, head: Header) -> (Writer, Bytes)
+    todo("csv-nv.write_header")
+
+// One record, as bytes, terminated.
+//
+// The terminator is CRLF, which is what RFC 4180 § 2.1 says and what
+// every spreadsheet writes.  A caller who wants LF writes the rows
+// into their own buffer and does not get to ask this package for it —
+// a writer with a line-ending flag is a writer whose output nobody can
+// predict from the dialect they were handed.
+//
+// A field is quoted when it contains the delimiter, the quote, a
+// carriage return or a line feed, and not otherwise: `needs_quote` is
+// that rule, exposed, because a caller building a header by hand wants
+// the same answer.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     let w = writer.writer(dialect.rfc4180())
+//     let (_, out) = writer.write_row(w, ["alice", "de Vries, A"])
+//     println("${bytes.len(out)}")             // quoted second field
+// ```
+pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
+    todo("csv-nv.write_row")
+
+// Several records, as one run of bytes.
+//
+// The same as calling `write_row` in a loop and concatenating, and it
+// is here because the loop is otherwise written at every call site
+// with a different accumulator.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     let w = writer.writer(dialect.rfc4180())
+//     let (_, out) = writer.write_rows(w, [["a", "b"], ["c", "d"]])
+//     println("${bytes.len(out)}")             // 8 — two CRLF records
+// ```
+pub fn write_rows(w: Writer, rows: [[Str]]) -> (Writer, Bytes)
+    todo("csv-nv.write_rows")
+
+// Whether this field has to be quoted under this dialect.
+//
+// True when the field contains the delimiter, the quote byte, a
+// carriage return or a line feed.  Not for a leading space: RFC 4180
+// § 2.4 makes the space part of the field, so a reader that does not
+// trim reads it back correctly unquoted, and a reader that does trim
+// was asked to.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     println("${writer.needs_quote(dialect.rfc4180(), "de Vries, A")}")  // true
+//     println("${writer.needs_quote(dialect.rfc4180(), "alice")}")        // false
+// ```
+pub fn needs_quote(d: Dialect, field: Str) -> Bool
+    todo("csv-nv.needs_quote")
+
+// This field as it will appear in the file: quoted if it has to be,
+// with the inner quotes escaped the way the dialect says.
+//
+// Doubling by default (RFC 4180 § 2.7), or the dialect's `escape` byte
+// when it has one.  Exposed because a caller writing a file this
+// package does not otherwise produce — a header comment, a footer —
+// still needs one field spelled correctly.
+//
+// ```novo
+// use writer
+// use dialect
+//
+// fn main() [io]
+//     println(writer.quote_field(dialect.rfc4180(), "say \"hi\""))
+//     // "say ""hi"""
+// ```
+pub fn quote_field(d: Dialect, field: Str) -> Str
+    todo("csv-nv.quote_field")

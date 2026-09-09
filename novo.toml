@@ -1,0 +1,36 @@
+[package]
+name        = "csv-nv"
+version     = "0.0.1"
+description = "RFC 4180 comma-separated values, read and written without performing anything: a feed-and-drain reader the host pumps, a writer that returns bytes, a dialect value for the formats that are not quite the RFC, typed access to a record by index and by header name, and errors that name the line and the column."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`, and the one function that takes a stream stays inside that
+# budget by BINDING its cost rather than spending one:
+# `read_all<S: Read[e]>(…) -> … [e]` is charged whatever the caller's
+# impl supplies (SPEC § 5.6).  Nothing else in the package reaches for
+# anything at all.
+layer       = "core"
+
+category    = "data"
+
+tags        = ["csv", "rfc4180", "tsv", "parser", "sans-io", "data"]
+repository  = "https://github.com/novolang/csv-nv"
+maintainers = ["novo-lang"]
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Reading and writing comma-separated values"
+
+[dependencies]
+# None.  The scanner is a hand-written pass over bytes, the reader
+# takes its stream through the standard library's `Read` trait, and
+# there is nothing else this package needs from anybody.

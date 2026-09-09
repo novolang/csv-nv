@@ -1,0 +1,102 @@
+// writer_tests.nv — the API suite for the writer.
+//
+// RED ON PURPOSE: every body is a `todo()`.  Run with `--isolate` for
+// one verdict per `@test`.
+//
+// THE PROMISE UNDER MOST OF THESE CASES is the round trip — what this
+// writer emits, this package's reader reads back as the records that
+// went in, under the same dialect.  Everything else about a CSV writer
+// is a detail of when it quotes; that is the property.
+
+use std.test
+use writer
+use reader
+use record
+use dialect
+
+@test
+fn test_a_fresh_writer_has_emitted_nothing() [io]
+    test.case("writer")
+    let w = writer.writer(dialect.rfc4180())
+    test.assert(w.rows == 0)
+    test.assert(w.width == -1)
+
+@test
+fn test_write_row_terminates_with_crlf() [io]
+    test.case("RFC 4180 § 2.1")
+    let (w, out) = writer.write_row(writer.writer(dialect.rfc4180()), ["a", "b"])
+    test.assert(bytes.len(out) == 5)   // a , b CR LF
+    test.assert(w.rows == 1)
+    test.assert(w.width == 2)
+
+@test
+fn test_write_header_is_first_or_nothing() [io]
+    test.case("a header on a fresh writer")
+    let (w1, out1) = writer.write_header(writer.writer(dialect.rfc4180()),
+                                         Header { names: ["name", "age"] })
+    test.assert(bytes.len(out1) == 10)   // name,age CR LF
+    test.assert(w1.rows == 1)
+
+    test.case("a header after a record emits nothing")
+    let (w2, _) = writer.write_row(writer.writer(dialect.rfc4180()), ["a"])
+    let (w3, out2) = writer.write_header(w2, Header { names: ["name"] })
+    test.assert(bytes.len(out2) == 0)
+    test.assert(w3.rows == w2.rows)
+
+@test
+fn test_write_rows_is_the_loop() [io]
+    test.case("write_rows")
+    let (w, out) = writer.write_rows(writer.writer(dialect.rfc4180()),
+                                     [["a", "b"], ["c", "d"]])
+    test.assert(bytes.len(out) == 10)
+    test.assert(w.rows == 2)
+
+@test
+fn test_needs_quote_is_the_rule_and_nothing_more() [io]
+    let d = dialect.rfc4180()
+
+    test.case("the four bytes that force a quote")
+    test.assert(writer.needs_quote(d, "de Vries, A"))
+    test.assert(writer.needs_quote(d, "say \"hi\""))
+    test.assert(writer.needs_quote(d, "two\nlines"))
+    test.assert(writer.needs_quote(d, "cr\rhere"))
+
+    test.case("and nothing else does")
+    test.assert(writer.needs_quote(d, "alice") == false)
+    test.assert(writer.needs_quote(d, "") == false)
+    test.assert(writer.needs_quote(d, " leading") == false)
+    test.assert(writer.needs_quote(d, "trailing ") == false)
+
+    test.case("the rule follows the dialect's delimiter")
+    let semis = dialect.with_delim(d, 0x3B)
+    test.assert(writer.needs_quote(semis, "a;b"))
+    test.assert(writer.needs_quote(semis, "a,b") == false)
+
+@test
+fn test_quote_field_doubles_by_default_and_escapes_when_told() [io]
+    test.case("RFC 4180 § 2.7 doubling")
+    test.assert(writer.quote_field(dialect.rfc4180(), "say \"hi\"")
+                == "\"say \"\"hi\"\"\"")
+
+    test.case("a field that needs no quoting is returned as it stands")
+    test.assert(writer.quote_field(dialect.rfc4180(), "alice") == "alice")
+
+    test.case("a backslash dialect escapes instead")
+    let bs = dialect.with_escape(dialect.rfc4180(), 0x5C)
+    test.assert(writer.quote_field(bs, "say \"hi\"") == "\"say \\\"hi\\\"\"")
+
+@test
+fn test_the_round_trip_is_the_promise() [io]
+    test.case("write then read gives back the records")
+    let d = dialect.with_header(dialect.rfc4180(), false)
+    let (_, out) = writer.write_rows(writer.writer(d),
+                                     [["alice", "de Vries, A"],
+                                      ["bob", "say \"hi\""],
+                                      ["carol", "two\nlines"]])
+    match reader.parse(bytes.to_str(out), d)
+        Ok(rows) =>
+            test.assert(list.len(rows) == 3)
+            test.assert(rows[0].fields[1] == "de Vries, A")
+            test.assert(rows[1].fields[1] == "say \"hi\"")
+            test.assert(record.field(rows[2], 1) == Some("two\nlines"))
+        Err(_)   => test.fail("this package cannot read its own output")

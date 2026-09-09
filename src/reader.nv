@@ -1,0 +1,284 @@
+// reader.nv — the load-bearing interface: a CSV reader that performs
+// nothing.
+//
+// THE SHAPE, AND WHY IT IS THIS ONE
+//
+// `csv-nv` is a `core` package, so its budget is no effects at all and
+// it may not read a file, a socket or standard input.  A CSV file is
+// exactly the thing a caller wants to stream.  Those two facts are
+// reconciled by a FEED-AND-DRAIN STATE MACHINE: the host holds the
+// stream, hands this package whatever bytes it has, and gets back the
+// records those bytes completed plus a reader to hand the next chunk
+// to.  Nothing here reads and nothing here waits.
+//
+//     var r = reader.reader(dialect.rfc4180())
+//     let (r2, rows) = reader.feed(r, chunk)     // as many times as you like
+//     let rest = reader.finish(r2)!              // once, at end of stream
+//
+// A chunk may split anything — a field, a quoted field containing a
+// newline, a CRLF between the CR and the LF — and the reader carries
+// whatever it could not finish into the next call.  That is the whole
+// contract, and it is why `feed` returns a NEW reader rather than
+// mutating one: `[mutate]` is a host effect and this package has none.
+//
+// `read_all` IS THE SAME MACHINE WITH THE LOOP INSIDE IT
+//
+//     pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> … [e]
+//
+// The bound binds `Read`'s effect parameter and the clause uses it
+// (SPEC § 5.6), so this one function costs whatever the caller's
+// stream costs — `[io]` for a file, `[io, net]` for a socket, nothing
+// for an in-memory buffer — and the package stays `core`, because the
+// impl that supplies the effect is declared where the host is.  It is
+// the direct shape, and it is here so that the ninety per cent of
+// callers who just have a file do not have to write the pump.
+//
+// WHAT THIS PACKAGE IS NOT
+//
+// It does not decode.  A field is bytes that came out of the file with
+// the quoting removed, handed back as a `Str` without being validated
+// as UTF-8, because a CSV reader that refused a Latin-1 export would
+// be a CSV reader nobody could use on the files they actually have.
+// It does not infer types either: `record`'s typed reads are asked
+// for, one column at a time, by a caller who decided.
+
+use dialect
+use record
+
+// A CSV reader between chunks.
+//
+// Opaque in practice — the fields are here so that the state is
+// reviewable rather than because a caller should read them — and
+// carried by value: `feed` returns the next one and the previous one
+// is finished with.  A reader that has failed stays failed; `error`
+// is what says so, and every subsequent `feed` emits nothing.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.rfc4180())
+//     println("${r.line}")                     // 1
+// ```
+pub struct Reader
+    // The dialect this reader was built with, unchanged.
+    dialect: Dialect
+    // The 1-based line the scanner is on.  Advances on a record
+    // separator AND on a newline inside a quoted field, because it is
+    // a position in the file, not a record count.
+    line: Int
+    // The 1-based byte column within that line.
+    col: Int
+    // How many records have been EMITTED, header excluded.  The next
+    // `Row` gets this as its `index`.
+    index: Int
+    // Where the scanner is: at the start of a field, inside an
+    // unquoted field, inside a quoted field, just after a quote inside
+    // a quoted field, or inside a comment line.  An `Int` rather than
+    // an enum so that the whole reader stays copyable cheaply.
+    state: Int
+    // Fields of the record currently being built, complete so far.
+    pending: [Str]
+    // The bytes of the field currently being built.
+    partial: Str
+    // The header, once `has_header` has consumed it; empty before.
+    head: [Str]
+    // The sticky failure, or `-1`.  `error` reads it back as a
+    // `CsvError` with the position it was recorded at.
+    failed: Int
+    // The line the sticky failure was recorded at, or `-1`.
+    failed_line: Int
+    // The column the sticky failure was recorded at, or `-1`.
+    failed_col: Int
+
+// A reader at the start of a file.
+//
+// A dialect `dialect.check` refuses does not fail here — there is no
+// error channel on a constructor — it produces a reader that is
+// already failed, so the first `feed` emits nothing and `error`
+// answers `BadDialect`.  That is one failure path instead of two, and
+// it is checkable before a byte is read by calling `dialect.check`
+// yourself.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.tsv())
+//     match reader.error(r)
+//         Some(_) => println("bad dialect")
+//         None    => println("ready")
+// ```
+pub fn reader(d: Dialect) -> Reader
+    todo("csv-nv.reader")
+
+// Feed the next chunk; get back the reader to feed the chunk after it,
+// and every record those bytes COMPLETED.
+//
+// A record is complete when a record separator has been seen outside a
+// quoted field.  A chunk that ends mid-record produces no row for it
+// and the reader carries the partial state; a chunk that completes
+// three records produces three rows.  An empty chunk is legal and
+// completes nothing — it is not an end-of-stream signal, because a
+// caller reading a socket gets empty reads for reasons that are not
+// the end.  `finish` is the end-of-stream signal.
+//
+// A parse failure does not throw away the records already in this
+// chunk: they are returned, the reader is left failed, and `error`
+// says why.  A caller streaming a large file therefore keeps
+// everything up to the corruption, which is what a person fixing the
+// file wants to see.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.with_header(dialect.rfc4180(), false))
+//     let (_, rows) = reader.feed(r, bytes.from_str("a,b\n"))
+//     println("${list.len(rows)}")             // 1
+// ```
+pub fn feed(r: Reader, chunk: Bytes) -> (Reader, [Row])
+    todo("csv-nv.feed")
+
+// `feed` for a caller who has a `Str`.
+//
+// The same machine — the string is read as its bytes — and it exists
+// because a caller who has already read a file into a string should
+// not have to convert it back to bytes to hand it over.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.with_header(dialect.rfc4180(), false))
+//     let (_, rows) = reader.feed_str(r, "a,b\nc,d\n")
+//     println("${list.len(rows)}")             // 2
+// ```
+pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
+    todo("csv-nv.feed_str")
+
+// End of stream: the last record, if the file did not end with a
+// separator, and the verdict.
+//
+// RFC 4180 § 2.2 makes the final line break optional, so a file ending
+// `bob,25` has a record in it that no `feed` has emitted — this is
+// where it comes out.  A file ending with a separator has nothing left
+// and this returns an empty list, NOT a row of one empty field.
+//
+// `Err` when the reader is failed, including the failure a `feed`
+// recorded earlier and the one only the end of the stream can find: a
+// quoted field that was never closed.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.with_header(dialect.rfc4180(), false))
+//     let (r2, _) = reader.feed_str(r, "a,b")
+//     match reader.finish(r2)
+//         Ok(rows) => println("${list.len(rows)}")   // 1
+//         Err(_)   => println("bad file")
+// ```
+pub fn finish(r: Reader) -> Result<[Row], CsvError>
+    todo("csv-nv.finish")
+
+// The sticky failure this reader is carrying, or `None`.
+//
+// Once set it is never cleared: a CSV file that has gone wrong at byte
+// 40,000 does not come right again, and a reader that tried to
+// resynchronise would be inventing records.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.rfc4180())
+//     match reader.error(r)
+//         Some(_) => println("failed")
+//         None    => println("fine")
+// ```
+pub fn error(r: Reader) -> ?CsvError
+    todo("csv-nv.error")
+
+// The header, once a `has_header` dialect has consumed one.
+//
+// `None` before the first record has been seen, and `None` for ever
+// under a dialect with `has_header` off — that caller has the header
+// as the first `Row` and turns it into one with `record.header`.
+//
+// ```novo
+// use reader
+// use dialect
+// use record
+//
+// fn main() [io]
+//     let r = reader.reader(dialect.rfc4180())
+//     let (r2, _) = reader.feed_str(r, "name,age\nalice,30\n")
+//     match reader.header_row(r2)
+//         Some(h) => println("${record.names(h)}")
+//         None    => println("no header yet")
+// ```
+pub fn header_row(r: Reader) -> ?Header
+    todo("csv-nv.header_row")
+
+// Read a whole stream, and be charged exactly what the stream costs.
+//
+// THE LOAD-BEARING SIGNATURE OF THIS PACKAGE.  `S: Read[e]` binds the
+// effect parameter of the standard library's `Read` trait and the
+// clause is `[e]`, so the row means "whatever the impl behind `S`
+// supplies" — the call site substitutes it, a `File` charges its
+// caller `[io]`, an in-memory `Buffer` charges nothing, and this
+// package remains `core` because it has not named an effect of its
+// own (SPEC § 5.6, and `docs/publishing.md` § Design).
+//
+// It is the same machine as `feed` and `finish` with the pump written
+// once, here, instead of once per caller.  Use `feed` when the bytes
+// arrive from somewhere this does not fit — a frame decoder, a
+// decompressor, a chunk at a time from a browser — and use this
+// otherwise.
+//
+// `Transport` carries the stream's own `IoError` through, so a caller
+// can still tell a timeout from a truncated file.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn read_file(path: Str) -> Result<[Row], CsvError> [io, fs]
+//     match File.open_read(path)
+//         None    => Err(Transport(IoNotFound))
+//         Some(f) =>
+//             let h: File = f
+//             reader.read_all(h, dialect.rfc4180())
+//
+// fn main() [io, fs]
+//     match read_file("people.csv")
+//         Ok(rows) => println("${list.len(rows)} record(s)")
+//         Err(e)   => println(e.message())
+// ```
+pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> Result<[Row], CsvError> [e]
+    todo("csv-nv.read_all")
+
+// A whole CSV document already in memory, as records.
+//
+// `reader` + one `feed_str` + `finish`, for the caller who has the
+// text and wants the rows.  It is the shape `std.csv.parse` has, with
+// a dialect and an error that names a position.
+//
+// ```novo
+// use reader
+// use dialect
+//
+// fn main() [io]
+//     match reader.parse("name,age\nalice,30\n", dialect.rfc4180())
+//         Ok(rows) => println("${list.len(rows)}")   // 1 — the header is consumed
+//         Err(_)   => println("bad file")
+// ```
+pub fn parse(text: Str, d: Dialect) -> Result<[Row], CsvError>
+    todo("csv-nv.parse")

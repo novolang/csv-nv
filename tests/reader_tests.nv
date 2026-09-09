@@ -1,0 +1,183 @@
+// reader_tests.nv — the API suite for the feed-and-drain reader.
+//
+// RED ON PURPOSE: every body is a `todo()`.  Run it with
+// `novo test tests/reader_tests.nv --isolate` to get one verdict per
+// `@test` naming the function each stopped at.
+//
+// THE ONE THING THIS SUITE PROVES TODAY, before any body exists:
+// `test_read_all_over_a_buffer_costs_nothing` calls
+// `reader.read_all(Buffer.from_str(…), …)` from a function whose only
+// effect row is `[io]` — the `println` — and it COMPILES.  The
+// standard library declares `impl Read[] for Buffer`, so `[e]` in
+// `read_all`'s clause substitutes to nothing at that call site.  A
+// signature that had spent `[io]` instead of binding it would fail
+// here, at the compiler, which is the whole reason to publish an
+// interface before a body.
+
+use std.test
+use reader
+use record
+use dialect
+use csverror
+
+// A reader over the RFC's own dialect with the header turned off, so
+// that a fixture's first record is data rather than a header.
+fn headerless() -> Reader
+    reader.reader(dialect.with_header(dialect.rfc4180(), false))
+
+@test
+fn test_a_fresh_reader_is_at_the_start_and_has_not_failed() [io]
+    test.case("reader")
+    let r = reader.reader(dialect.rfc4180())
+    test.assert(r.line == 1)
+    test.assert(r.index == 0)
+
+    test.case("error is None on a good dialect")
+    match reader.error(r)
+        None    => test.assert(true)
+        Some(_) => test.fail("a reader over rfc4180 starts failed")
+
+@test
+fn test_a_bad_dialect_produces_a_reader_that_is_already_failed() [io]
+    test.case("a constructor has no error channel, so the reader carries it")
+    let r = reader.reader(dialect.with_quote(dialect.rfc4180(), 0x2C))
+    match reader.error(r)
+        Some(BadDialect(_)) => test.assert(true)
+        Some(_)             => test.fail("failed for the wrong reason")
+        None                => test.fail("an ambiguous dialect was accepted")
+
+@test
+fn test_feed_emits_only_completed_records() [io]
+    test.case("a whole record completes")
+    let (r1, rows1) = reader.feed_str(headerless(), "a,b\n")
+    test.assert(list.len(rows1) == 1)
+    test.assert(rows1[0].fields[1] == "b")
+    test.assert(rows1[0].line == 1)
+    test.assert(rows1[0].index == 0)
+
+    test.case("a partial record completes nothing")
+    let (_, rows2) = reader.feed_str(r1, "c,d")
+    test.assert(list.len(rows2) == 0)
+
+    test.case("an empty chunk is legal and is not end of stream")
+    let (_, rows3) = reader.feed_str(r1, "")
+    test.assert(list.len(rows3) == 0)
+
+@test
+fn test_a_chunk_may_split_anything() [io]
+    test.case("split inside a field")
+    let (a1, _) = reader.feed_str(headerless(), "alice,3")
+    let (_, arows) = reader.feed_str(a1, "0\n")
+    test.assert(arows[0].fields[1] == "30")
+
+    test.case("split inside a quoted field that contains a newline")
+    let (b1, _) = reader.feed_str(headerless(), "\"de Vries,\nA\",2")
+    let (_, brows) = reader.feed_str(b1, "9\n")
+    test.assert(brows[0].fields[0] == "de Vries,\nA")
+    test.assert(brows[0].fields[1] == "29")
+
+    test.case("split between the CR and the LF of a CRLF")
+    let (c1, crows1) = reader.feed_str(headerless(), "a,b\r")
+    test.assert(list.len(crows1) == 0)
+    let (_, crows2) = reader.feed_str(c1, "\nc,d\r\n")
+    test.assert(list.len(crows2) == 2)
+
+@test
+fn test_feed_takes_bytes_as_well_as_a_string() [io]
+    test.case("feed over Bytes")
+    let (_, rows) = reader.feed(headerless(), bytes.from_str("a,b\n"))
+    test.assert(list.len(rows) == 1)
+    test.assert(rows[0].fields[0] == "a")
+
+@test
+fn test_finish_yields_the_unterminated_last_record() [io]
+    test.case("RFC 4180 § 2.2 makes the final line break optional")
+    let (r, _) = reader.feed_str(headerless(), "a,b")
+    match reader.finish(r)
+        Ok(rows) =>
+            test.assert(list.len(rows) == 1)
+            test.assert(rows[0].fields[1] == "b")
+        Err(_)   => test.fail("a file with no trailing newline is legal")
+
+    test.case("a file that ended on a separator has nothing left")
+    let (r2, _) = reader.feed_str(headerless(), "a,b\n")
+    match reader.finish(r2)
+        Ok(rows) => test.assert(list.len(rows) == 0)
+        Err(_)   => test.fail("a terminated file is legal")
+
+@test
+fn test_an_unterminated_quote_is_found_at_the_end_of_the_stream() [io]
+    test.case("finish is the only place this can be detected")
+    let (r, _) = reader.feed_str(headerless(), "\"open,1\n")
+    match reader.finish(r)
+        Err(UnterminatedQuote(l, c)) =>
+            test.assert(l == 1)
+            test.assert(c == 1)
+        Err(_)                       => test.fail("wrong reason for an unclosed quote")
+        Ok(_)                        => test.fail("an unclosed quote is not a legal file")
+
+@test
+fn test_a_failure_is_sticky_and_keeps_what_came_before_it() [io]
+    test.case("the records before the corruption are still returned")
+    let strict = dialect.with_strict(
+        dialect.with_header(dialect.rfc4180(), false), true)
+    let (r, rows) = reader.feed_str(reader.reader(strict), "a,b\nc,d,e\n")
+    test.assert(list.len(rows) >= 1)
+
+    test.case("and the reader is left failed")
+    match reader.error(r)
+        Some(RaggedRow(_, _, _)) => test.assert(true)
+        Some(_)                  => test.fail("failed for the wrong reason")
+        None                     => test.fail("a ragged row is refused under strict")
+
+@test
+fn test_the_header_is_consumed_rather_than_emitted() [io]
+    test.case("header_row after the first record")
+    let (r, rows) = reader.feed_str(reader.reader(dialect.rfc4180()),
+                                    "name,age\nalice,30\n")
+    test.assert(list.len(rows) == 1)
+    test.assert(rows[0].fields[0] == "alice")
+    test.assert(rows[0].index == 0)
+    match reader.header_row(r)
+        Some(h) => test.assert(record.names(h)[1] == "age")
+        None    => test.fail("a has_header dialect consumed a header")
+
+    test.case("header_row is None before anything has been fed")
+    match reader.header_row(reader.reader(dialect.rfc4180()))
+        Some(_) => test.fail("no bytes, no header")
+        None    => test.assert(true)
+
+    test.case("and None for ever under a headerless dialect")
+    let (r2, _) = reader.feed_str(headerless(), "name,age\n")
+    match reader.header_row(r2)
+        Some(_) => test.fail("this dialect was told there is no header")
+        None    => test.assert(true)
+
+@test
+fn test_parse_is_the_whole_document_in_one_call() [io]
+    test.case("parse")
+    match reader.parse("name,age\nalice,30\nbob,25\n", dialect.rfc4180())
+        Ok(rows) =>
+            test.assert(list.len(rows) == 2)
+            test.assert(rows[1].index == 1)
+        Err(_)   => test.fail("a well-formed document")
+
+    test.case("parse reports the position of a bad one")
+    match reader.parse("a,b\n\"open\n", dialect.rfc4180())
+        Err(e) => test.assert(csverror.line_of(e) == 2)
+        Ok(_)  => test.fail("an unclosed quote is not a legal file")
+
+@test
+fn test_read_all_over_a_buffer_costs_nothing() [io]
+    // The claim: `read_all<S: Read[e]>` binds the trait's effect
+    // parameter, `impl Read[] for Buffer` supplies nothing, and this
+    // function's row is `[io]` for the `println` alone.  If the
+    // signature had spent an effect instead of binding one, this file
+    // would not compile — which is the assertion, and the compiler
+    // makes it before any body exists.
+    test.case("read_all over an in-memory Buffer")
+    let src = Buffer.from_str("name,age\nalice,30\n")
+    match reader.read_all(src, dialect.rfc4180())
+        Ok(rows) => test.assert(list.len(rows) == 1)
+        Err(_)   => test.fail("a well-formed document")
+    src.drop()

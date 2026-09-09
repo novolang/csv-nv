@@ -1,0 +1,285 @@
+// record.nv — a parsed record, and the two ways to ask it for a field.
+//
+// WHY A ROW IS A LIST OF STRINGS AND NOT A MAP
+//
+// A CSV file has no types and its header is optional, so the only
+// thing a parser can honestly hand back is the fields in order.  A map
+// from header name to value looks friendlier and is a worse fit: it
+// loses the order the file had, it cannot represent a duplicate header
+// (which real files have), and it costs one allocation per field per
+// record on a file whose whole point is that there are millions of
+// them.  So a `Row` is the fields, and the header is a SEPARATE value
+// the caller holds once — `Header` — that turns a name into an index.
+//
+// That split is what makes the by-name calls below cheap: `int_of` is
+// `column` then `int_at`, and `column` searches a list that is as long
+// as the file is wide, once per lookup, rather than hashing every
+// field of every record on the chance somebody asks.
+//
+// WHY EVERY TYPED READ RETURNS A `Result` AND NOT AN OPTION
+//
+// "this column is not a number" and "there is no such column" are
+// different problems with different fixes, and a caller typing a
+// column — which is what a statistics tool does with every column
+// before it can decide anything — needs to tell them apart on the
+// first record rather than after the run.  `?Int` collapses them.
+// `field` stays an option because there is only one way to fail: the
+// index is off the end.
+
+// One parsed record, with the two numbers a message needs.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let r = Row { fields: ["alice", "30"], line: 2, index: 0 }
+//     println("${record.width(r)} at line ${r.line}")   // 2 at line 2
+// ```
+pub struct Row
+    // The fields, in file order, unquoted and unescaped.  A field the
+    // file wrote as `""` is the empty string; a field the file did not
+    // write at all is not here, which is what makes `width` worth
+    // asking about.
+    fields: [Str]
+    // The 1-based line the record STARTED on.  Not the line it ended
+    // on: a quoted field may span lines, and the place a person goes
+    // to look is where the record began.
+    line: Int
+    // The 0-based record number, header excluded.  So under a dialect
+    // with `has_header`, the first data record is `0` and sits on line
+    // 2 — the pair says both things, and neither can be derived from
+    // the other once a quoted field has spanned a line.
+    index: Int
+
+// The header record, as a name-to-index question.
+//
+// Duplicate names are kept: the file had them, and dropping one would
+// silently discard a column.  `column` answers with the FIRST index a
+// name appears at, which is what every other CSV library does and what
+// a caller writing `column("id")` on a file with two `id` columns
+// almost certainly meant.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["name", "age"] }
+//     println("${record.names(h)}")
+// ```
+pub struct Header
+    // The column names, in file order, unquoted and unescaped.
+    names: [Str]
+
+// How many fields this record has.
+//
+// Worth asking on every record under a lenient dialect: RFC 4180 says
+// every record has the same number of fields and real files disagree,
+// so `strict` is what turns the disagreement into `RaggedRow` and this
+// is what a lenient caller uses instead.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     println("${record.width(Row { fields: ["a", "b"], line: 1, index: 0 })}")
+// ```
+pub fn width(row: Row) -> Int
+    todo("csv-nv.width")
+
+// The field at a 0-based index, or `None` past the end.
+//
+// The one lookup that cannot fail for an interesting reason, so it is
+// the one that returns an option rather than a `Result`.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let r = Row { fields: ["alice", "30"], line: 2, index: 0 }
+//     match record.field(r, 1)
+//         Some(v) => println(v)                // 30
+//         None    => println("no such field")
+// ```
+pub fn field(row: Row, i: Int) -> ?Str
+    todo("csv-nv.field")
+
+// The field under a header name.
+//
+// `NoSuchColumn` when the header has no such name, which is a fault in
+// the caller's spelling; `RaggedRow` when the header has it but this
+// record is too short to have reached it, which is a fault in the
+// file.  Two reasons, because the two fixes are in different places.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["name", "age"] }
+//     let r = Row { fields: ["alice", "30"], line: 2, index: 0 }
+//     match record.field_of(r, h, "age")
+//         Ok(v)  => println(v)                 // 30
+//         Err(_) => println("missing")
+// ```
+pub fn field_of(row: Row, head: Header, name: Str) -> Result<Str, CsvError>
+    todo("csv-nv.field_of")
+
+// The field at an index, read as a decimal integer.
+//
+// Accepts an optional leading `+` or `-` and then digits, with
+// surrounding spaces ignored whatever the dialect's `trim` says — a
+// number with a space around it is a number, and the alternative is a
+// caller who has to trim before every typed read.  Nothing else:
+// no thousands separators, no underscores, no hexadecimal.  A file
+// that writes `1,234` has written two fields and this package will not
+// guess otherwise.
+//
+// `NotAnInt` carries the text, so the caller's message can quote it.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let r = Row { fields: ["alice", "30"], line: 2, index: 0 }
+//     match record.int_at(r, 1)
+//         Ok(n)  => println("${n + 1}")        // 31
+//         Err(_) => println("not a number")
+// ```
+pub fn int_at(row: Row, i: Int) -> Result<Int, CsvError>
+    todo("csv-nv.int_at")
+
+// The field under a header name, read as a decimal integer.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["name", "age"] }
+//     let r = Row { fields: ["alice", "30"], line: 2, index: 0 }
+//     match record.int_of(r, h, "age")
+//         Ok(n)  => println("${n}")            // 30
+//         Err(_) => println("not a number")
+// ```
+pub fn int_of(row: Row, head: Header, name: Str) -> Result<Int, CsvError>
+    todo("csv-nv.int_of")
+
+// The field at an index, read as a float.
+//
+// Accepts what `int_at` accepts plus a decimal point and an `e`
+// exponent — the spelling `str.to_float` accepts, so that a file
+// round-trips through this package and the standard library the same
+// way.  Not accepted: `NaN`, `inf`, and a bare `.5`, all of which are
+// far more often a truncated field than a number somebody meant.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let r = Row { fields: ["fee", "1.25"], line: 2, index: 0 }
+//     match record.float_at(r, 1)
+//         Ok(f)  => println("${f}")            // 1.25
+//         Err(_) => println("not a number")
+// ```
+pub fn float_at(row: Row, i: Int) -> Result<Float, CsvError>
+    todo("csv-nv.float_at")
+
+// The field under a header name, read as a float.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["item", "amount"] }
+//     let r = Row { fields: ["fee", "1.25"], line: 2, index: 0 }
+//     match record.float_of(r, h, "amount")
+//         Ok(f)  => println("${f}")            // 1.25
+//         Err(_) => println("not a number")
+// ```
+pub fn float_of(row: Row, head: Header, name: Str) -> Result<Float, CsvError>
+    todo("csv-nv.float_of")
+
+// The field at an index, read as a boolean.
+//
+// The accepted set, case-insensitively: `true`, `false`, `t`, `f`,
+// `yes`, `no`, `y`, `n`, `1`, `0`.  It is written out here because a
+// boolean column is the one place CSV libraries quietly differ, and a
+// caller who knows the set can decide whether their file is in it
+// before running over a million records.  An empty field is NOT false
+// — it is `NotABool`, because a spreadsheet's empty cell means "nobody
+// said" and turning that into `false` is a decision this package is
+// not entitled to make.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let r = Row { fields: ["paid", "yes"], line: 2, index: 0 }
+//     match record.bool_at(r, 1)
+//         Ok(b)  => println("${b}")            // true
+//         Err(_) => println("not a boolean")
+// ```
+pub fn bool_at(row: Row, i: Int) -> Result<Bool, CsvError>
+    todo("csv-nv.bool_at")
+
+// The field under a header name, read as a boolean.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["item", "paid"] }
+//     let r = Row { fields: ["fee", "yes"], line: 2, index: 0 }
+//     match record.bool_of(r, h, "paid")
+//         Ok(b)  => println("${b}")            // true
+//         Err(_) => println("not a boolean")
+// ```
+pub fn bool_of(row: Row, head: Header, name: Str) -> Result<Bool, CsvError>
+    todo("csv-nv.bool_of")
+
+// This record read as a header.
+//
+// For the caller who parsed with `has_header` off — because they had
+// to look at the first record to decide whether it WAS a header — and
+// then decided it was.  `reader.header_row` is the other route, for
+// the caller who knew in advance.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let first = Row { fields: ["name", "age"], line: 1, index: 0 }
+//     println("${record.names(record.header(first))}")
+// ```
+pub fn header(row: Row) -> Header
+    todo("csv-nv.header")
+
+// The 0-based index of a column name, or `None`.
+//
+// The first index, when the header repeats a name.  A caller who needs
+// the second one reads `names` and searches it themselves — this
+// package will not grow a `column_all`, because a file with duplicate
+// headers is a file whose reader has to decide something, and a second
+// call would let them not decide it.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     let h = Header { names: ["name", "age"] }
+//     match record.column(h, "age")
+//         Some(i) => println("${i}")           // 1
+//         None    => println("no such column")
+// ```
+pub fn column(head: Header, name: Str) -> ?Int
+    todo("csv-nv.column")
+
+// The column names, in file order.
+//
+// ```novo
+// use record
+//
+// fn main() [io]
+//     for n in record.names(Header { names: ["name", "age"] })
+//         println(n)
+// ```
+pub fn names(head: Header) -> [Str]
+    todo("csv-nv.names")

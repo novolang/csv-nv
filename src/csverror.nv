@@ -1,0 +1,130 @@
+// csverror.nv — every way a CSV file can refuse to be read, and where.
+//
+// WHY THE POSITION IS IN THE VARIANT AND NOT BESIDE IT
+//
+// A CSV file is a thing a person edited, and the answer they need is
+// "line 4,812, column 37", not "parse error".  A parser that returns a
+// reason and makes the caller carry the cursor gets a caller that does
+// not carry the cursor.  So every reason that HAS a position carries
+// it, and the two that do not — a column that is not in the header, a
+// dialect that contradicts itself — are honest about having none:
+// `line_of` answers `-1` for them rather than `0`, because line 0 does
+// not exist and a caller that prints it has been told nothing.
+//
+// Lines are 1-based and columns are 1-based BYTE offsets into the
+// line, which is what an editor's status bar shows and what a `sed -n`
+// can jump to.  Not character offsets: this package never decodes, and
+// a byte offset it can always produce is worth more than a character
+// offset it would have to guess at on invalid UTF-8.
+//
+// THE TRANSPORT VARIANT IS THE LAYER SEAM.  `reader.read_all` takes a
+// stream from its host and the stream can fail; the failure is the
+// host's `IoError`, carried through rather than flattened to a string,
+// so a caller that wants to retry on `IoInterrupted` still can.  It
+// costs this package nothing: `IoError` is a type, and naming a type
+// spends no effects.
+
+// Why a CSV input, or a request about a parsed row, could not be
+// answered.
+//
+// ```novo
+// use csverror
+//
+// fn main() [io]
+//     let e = UnterminatedQuote(4812, 37)
+//     println("line ${csverror.line_of(e)}, col ${csverror.col_of(e)}")
+// ```
+pub enum CsvError
+    // A quoted field was still open when the input ended.  RFC 4180
+    // § 2.5 has no way to close it later, so this is fatal for the
+    // record rather than recoverable — the position is where the
+    // opening quote was, which is the byte a person has to go fix.
+    UnterminatedQuote(line: Int, col: Int)
+    // A `"` inside an UNQUOTED field.  RFC 4180 § 2.5 forbids it and
+    // says nothing about what to do, so the dialect decides: `strict`
+    // reports this, and the lenient reading keeps the quote as data.
+    BareQuote(line: Int, col: Int)
+    // A record whose field count differs from the header's, under a
+    // `strict` dialect.  `want` is the header's width, `got` this
+    // record's — both, because which one is wrong is the reader's
+    // question and not the parser's.
+    RaggedRow(line: Int, want: Int, got: Int)
+    // A single field grew past `dialect.max_field` bytes.  The bound
+    // exists so that a reader fed a file with one unclosed quote does
+    // not accumulate the whole file into one field before finding out.
+    FieldTooLong(line: Int, col: Int, cap: Int)
+    // A lookup by header name found no such column.  No position:
+    // the fault is in the caller's name, not in the file.
+    NoSuchColumn(name: Str)
+    // A typed read found text that is not an integer.  `text` is the
+    // field as it stood, capped by the reader's own field bound, so
+    // the message can quote what was actually there.
+    NotAnInt(line: Int, col: Int, text: Str)
+    // A typed read found text that is not a float.
+    NotAFloat(line: Int, col: Int, text: Str)
+    // A typed read found text that is none of the accepted spellings
+    // of true or false — `bool_at` names the set it accepts.
+    NotABool(line: Int, col: Int, text: Str)
+    // Two `Dialect` fields cannot both be true: the delimiter and the
+    // quote are the same byte, the comment byte is the delimiter, a
+    // delimiter outside `0 ..= 255`.  `why` is prose because a
+    // dialect is built once at a call site a person is looking at.
+    BadDialect(why: Str)
+    // The stream underneath `reader.read_all` failed.  The host's
+    // error, unmodified: this package does not know what a socket
+    // timing out means to the program that opened it.
+    Transport(cause: IoError)
+
+// The one-line message, for a caller who is printing rather than
+// matching.
+//
+// It names the reason and, where there is one, the position — the
+// shape `path:line:col: message` a person's editor can jump to, minus
+// the path, which this package does not know.  A caller who wants to
+// decide something matches the variant instead; a caller who wants to
+// tell somebody what happened prints this.
+//
+// `Result<T, CsvError>` requires it — SPEC § 3.4 makes `Error` the
+// bound on a result's error type — so this impl exists whether or not
+// an interface release has anything to say yet, and its body is a
+// `todo()` like every other body here.
+impl Error for CsvError
+    // Panics with `not implemented` until the bodies land.
+    fn message(self) -> Str
+        todo("csv-nv.CsvError.message")
+
+// The 1-based line the error is about, or `-1` when it is not about a
+// place in the file.
+//
+// The two cases with no line are `NoSuchColumn` — the caller named a
+// column that is not in the header, which is a fault in the call — and
+// `BadDialect`, which is a fault in a `Dialect` built before any file
+// was opened.  `Transport` is also `-1`: the stream failed, so the
+// parser never reached a line to blame.
+//
+// ```novo
+// use csverror
+//
+// fn main() [io]
+//     println("${csverror.line_of(NoSuchColumn("amount"))}")   // -1
+// ```
+pub fn line_of(e: CsvError) -> Int
+    todo("csv-nv.line_of")
+
+// The 1-based byte column the error is about, or `-1` when it is not
+// about a place in the file.
+//
+// `RaggedRow` has a line but no column — the record is the wrong
+// width, and no single byte in it is the reason — so it answers `-1`
+// here and a real line number above.  That asymmetry is deliberate:
+// a caller printing `line:col` should print `line` alone rather than
+// invent a column.
+//
+// ```novo
+// use csverror
+//
+// fn main() [io]
+//     println("${csverror.col_of(RaggedRow(12, 5, 4))}")       // -1
+// ```
+pub fn col_of(e: CsvError) -> Int
+    todo("csv-nv.col_of")

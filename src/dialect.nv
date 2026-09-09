@@ -1,0 +1,237 @@
+// dialect.nv — the eight decisions that separate one comma-separated
+// file from another, in one value.
+//
+// RFC 4180 describes ONE file format and the world ships a dozen.  The
+// difference between them is small and boring — a semicolon instead of
+// a comma, a backslash instead of a doubled quote, a `#` line the
+// producer thinks is a comment — and every reader that hard-codes the
+// first reading grows flags until it has this struct anyway, spread
+// over its call sites.  So it is a value from the start, built once
+// where a person can read it and passed to the reader and the writer
+// both.
+//
+// WHY THE BYTES ARE `Int` AND NOT `Str`
+//
+// A delimiter is one byte.  Spelling it `","` invites `", "`, which is
+// not a delimiter, and forces every comparison in the scanner through
+// a string equality.  As an `Int` it is the byte the scanner is
+// already looking at, the constructors below spell the common ones by
+// name, and a caller with an exotic separator writes `0x1F` and means
+// it.  `-1` is the sentinel for "there is no such byte", which is how
+// a dialect turns a feature off.
+//
+// WHY VALIDATION IS A SEPARATE CALL
+//
+// `with_delim` cannot refuse: it returns a `Dialect`, and a builder
+// that returned `?Dialect` would make every chained call an unwrap.
+// So the builders are total, `check` is the one place that answers
+// whether the combination makes sense, and the reader calls it once
+// before it reads a byte — which means a contradictory dialect is
+// reported at the file, with a reason, rather than parsed around.
+
+// How to read or write one comma-separated file.
+//
+// Build one from `rfc4180()` or `tsv()` and change what differs; the
+// `with_*` calls each return a new value, so a dialect is a constant a
+// module can share.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let semis = dialect.with_delim(dialect.rfc4180(), 0x3B)  // ';'
+//     println("${semis.delim}")
+// ```
+pub struct Dialect
+    // The byte between fields.  `0x2C` (`,`) in RFC 4180.
+    delim: Int
+    // The byte that opens and closes a quoted field.  `0x22` (`"`).
+    quote: Int
+    // The byte that escapes a quote inside a quoted field, or `-1` for
+    // RFC 4180's doubling (`""`).  A file that uses `\"` — which is
+    // most files a shell script produced — sets this to `0x5C`.
+    escape: Int
+    // A byte that, as the FIRST byte of a line outside a quoted field,
+    // makes the whole line a comment.  `-1` for none, which is RFC
+    // 4180: the standard has no comments and neither does the default.
+    comment: Int
+    // Whether the first record is a header.  When true the reader
+    // consumes it into `reader.header_row` rather than emitting it,
+    // and the writer's `write_header` is what puts it back.
+    has_header: Bool
+    // Whether to drop leading and trailing spaces and tabs from an
+    // UNQUOTED field.  False by default, because RFC 4180 § 2.4 says
+    // the space is part of the field and a reader that silently
+    // disagrees loses data nobody asked it to lose.
+    trim: Bool
+    // Whether to refuse what RFC 4180 forbids instead of reading it
+    // the lenient way.  Under `strict` a bare quote in an unquoted
+    // field is `BareQuote` and a record of the wrong width is
+    // `RaggedRow`; otherwise the quote is data and the width varies.
+    strict: Bool
+    // The largest single field, in bytes, or `0` for unbounded.  This
+    // is the bound that keeps one unclosed quote in a hostile file
+    // from accumulating the whole file into one string before the
+    // reader notices; `FieldTooLong` is what it reports.
+    max_field: Int
+
+// RFC 4180 as written: comma, double quote, doubled quotes, no
+// comments, no trimming, a header row, lenient, fields bounded at
+// 1 MiB.
+//
+// The two places this is not literally the RFC are the header — the
+// RFC makes it optional and every consumer of this package has one —
+// and the field bound, which the RFC does not mention because it does
+// not consider a hostile input.  Both are `with_*` calls away.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.rfc4180()
+//     println("${d.delim} ${d.quote}")         // 44 34
+// ```
+pub fn rfc4180() -> Dialect
+    todo("csv-nv.rfc4180")
+
+// Tab-separated, otherwise RFC 4180.  The delimiter is `0x09` and
+// nothing else changes, which is what `csv.excel_tab` means in
+// Python's `csv` and what `--delimiter=$'\t'` means to `csvkit`.
+//
+// Note it is NOT the IANA `text/tab-separated-values` format, which
+// forbids quoting entirely and escapes tabs as `\t`.  A file in that
+// format reads correctly here as long as no field contains a quote.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     println("${dialect.tsv().delim}")        // 9
+// ```
+pub fn tsv() -> Dialect
+    todo("csv-nv.tsv")
+
+// The same dialect with a different field separator.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_delim(dialect.rfc4180(), 0x7C)   // '|'
+//     println("${d.delim}")                    // 124
+// ```
+pub fn with_delim(d: Dialect, byte: Int) -> Dialect
+    todo("csv-nv.with_delim")
+
+// The same dialect with a different quote byte.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_quote(dialect.rfc4180(), 0x27)   // '\''
+//     println("${d.quote}")                    // 39
+// ```
+pub fn with_quote(d: Dialect, byte: Int) -> Dialect
+    todo("csv-nv.with_quote")
+
+// The same dialect with a backslash-style escape byte, or `-1` to go
+// back to RFC 4180's doubled quotes.
+//
+// Setting an escape does not turn doubling off: a file that uses `\"`
+// usually still writes `""` somewhere, and a reader that accepted only
+// one of them would fail on the other half of the same file.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_escape(dialect.rfc4180(), 0x5C)  // '\\'
+//     println("${d.escape}")                   // 92
+// ```
+pub fn with_escape(d: Dialect, byte: Int) -> Dialect
+    todo("csv-nv.with_escape")
+
+// The same dialect with a comment byte, or `-1` for none.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_comment(dialect.rfc4180(), 0x23) // '#'
+//     println("${d.comment}")                  // 35
+// ```
+pub fn with_comment(d: Dialect, byte: Int) -> Dialect
+    todo("csv-nv.with_comment")
+
+// The same dialect, reading the first record as a header or not.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_header(dialect.rfc4180(), false)
+//     println("${d.has_header}")               // false
+// ```
+pub fn with_header(d: Dialect, on: Bool) -> Dialect
+    todo("csv-nv.with_header")
+
+// The same dialect, trimming unquoted fields or not.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     println("${dialect.with_trim(dialect.rfc4180(), true).trim}")
+// ```
+pub fn with_trim(d: Dialect, on: Bool) -> Dialect
+    todo("csv-nv.with_trim")
+
+// The same dialect, refusing what RFC 4180 forbids or reading it
+// leniently.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     println("${dialect.with_strict(dialect.rfc4180(), true).strict}")
+// ```
+pub fn with_strict(d: Dialect, on: Bool) -> Dialect
+    todo("csv-nv.with_strict")
+
+// The same dialect with a different single-field bound, or `0` for
+// unbounded.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let d = dialect.with_max_field(dialect.rfc4180(), 4096)
+//     println("${d.max_field}")                // 4096
+// ```
+pub fn with_max_field(d: Dialect, bytes: Int) -> Dialect
+    todo("csv-nv.with_max_field")
+
+// `None` when the dialect is usable, and the reason when it is not.
+//
+// The combinations refused, all of which make the scanner ambiguous
+// rather than merely unusual: a delimiter equal to the quote, to the
+// escape or to the comment byte; a quote equal to the escape byte; any
+// of the four outside `-1 ..= 255`; a delimiter or a quote of `-1`,
+// which no file can be read without; a negative `max_field`.
+//
+// `reader.reader` and `writer.writer` both call this, so a caller who
+// does not is not skipping the check — they are only choosing to find
+// out later.
+//
+// ```novo
+// use dialect
+//
+// fn main() [io]
+//     let bad = dialect.with_quote(dialect.rfc4180(), 0x2C)  // ',' twice
+//     match dialect.check(bad)
+//         Some(_) => println("refused")
+//         None    => println("fine")
+// ```
+pub fn check(d: Dialect) -> ?CsvError
+    todo("csv-nv.check")

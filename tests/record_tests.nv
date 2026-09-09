@@ -1,0 +1,192 @@
+// record_tests.nv — the API suite for a parsed record.
+//
+// RED ON PURPOSE, like every suite in this package: the bodies are
+// `todo()`, so each assertion reaches `not implemented: csv-nv.<fn>`.
+// `novo test tests/record_tests.nv --isolate` gives every `@test` its
+// own process and prints which function each one stopped at, which is
+// the readable form of an interface package's verdict.
+//
+// What is asserted here is the CONTRACT, not the state: the fixtures
+// below are the rows the reader will produce, written by hand so that
+// the typed reads can be pinned down without a parser existing yet.
+
+use std.test
+use record
+use csverror
+
+// The two-column fixture every case below reads.
+fn alice() -> Row
+    Row { fields: ["alice", "30"], line: 2, index: 0 }
+
+fn people() -> Header
+    Header { names: ["name", "age"] }
+
+@test
+fn test_width_counts_the_fields() [io]
+    test.case("width")
+    test.assert(record.width(alice()) == 2)
+    test.assert(record.width(Row { fields: [], line: 1, index: 0 }) == 0)
+
+@test
+fn test_field_is_positional_and_bounded() [io]
+    test.case("field inside the record")
+    match record.field(alice(), 1)
+        Some(v) => test.assert(v == "30")
+        None    => test.fail("field 1 is missing from a 2-field record")
+
+    test.case("field past the end is None")
+    match record.field(alice(), 2)
+        Some(_) => test.fail("field 2 of a 2-field record answered")
+        None    => test.assert(true)
+
+    test.case("a negative index is None, not a panic")
+    match record.field(alice(), -1)
+        Some(_) => test.fail("a negative index answered")
+        None    => test.assert(true)
+
+@test
+fn test_column_and_names_read_the_header() [io]
+    test.case("column finds a name")
+    match record.column(people(), "age")
+        Some(i) => test.assert(i == 1)
+        None    => test.fail("`age` is in the header")
+
+    test.case("column refuses a name that is not there")
+    match record.column(people(), "amount")
+        Some(_) => test.fail("`amount` is not in the header")
+        None    => test.assert(true)
+
+    test.case("names is the header in file order")
+    let ns = record.names(people())
+    test.assert(list.len(ns) == 2)
+    test.assert(ns[0] == "name")
+
+    test.case("header turns a first record into one")
+    let h = record.header(Row { fields: ["name", "age"], line: 1, index: 0 })
+    test.assert(record.names(h)[1] == "age")
+
+@test
+fn test_field_of_separates_the_two_failures() [io]
+    test.case("field_of finds the column")
+    match record.field_of(alice(), people(), "name")
+        Ok(v)  => test.assert(v == "alice")
+        Err(_) => test.fail("`name` is in both the header and the record")
+
+    test.case("a name the header does not have is NoSuchColumn")
+    match record.field_of(alice(), people(), "amount")
+        Err(NoSuchColumn(n)) => test.assert(n == "amount")
+        Err(_)               => test.fail("wrong reason for a missing name")
+        Ok(_)                => test.fail("`amount` is not a column")
+
+    test.case("a record too short for its header is RaggedRow")
+    let short = Row { fields: ["alice"], line: 2, index: 0 }
+    match record.field_of(short, people(), "age")
+        Err(RaggedRow(l, want, got)) =>
+            test.assert(l == 2)
+            test.assert(want == 2)
+            test.assert(got == 1)
+        Err(_)                       => test.fail("wrong reason for a short record")
+        Ok(_)                        => test.fail("a 1-field record has no second column")
+
+@test
+fn test_int_reads_a_decimal_and_nothing_else() [io]
+    test.case("int_at")
+    match record.int_at(alice(), 1)
+        Ok(n)  => test.assert(n == 30)
+        Err(_) => test.fail("`30` is an integer")
+
+    test.case("int_of by header name")
+    match record.int_of(alice(), people(), "age")
+        Ok(n)  => test.assert(n == 30)
+        Err(_) => test.fail("`age` is 30")
+
+    test.case("a sign and surrounding space are accepted")
+    let signed = Row { fields: [" -7 "], line: 4, index: 2 }
+    match record.int_at(signed, 0)
+        Ok(n)  => test.assert(n == -7)
+        Err(_) => test.fail("` -7 ` is an integer")
+
+    test.case("a thousands separator is not a number")
+    let grouped = Row { fields: ["1,234"], line: 5, index: 3 }
+    match record.int_at(grouped, 0)
+        Err(NotAnInt(l, _, t)) =>
+            test.assert(l == 5)
+            test.assert(t == "1,234")
+        Err(_)                 => test.fail("wrong reason for a grouped number")
+        Ok(_)                  => test.fail("`1,234` is two fields, not one number")
+
+    test.case("an empty field is not zero")
+    let blank = Row { fields: [""], line: 6, index: 4 }
+    match record.int_at(blank, 0)
+        Err(NotAnInt(_, _, t)) => test.assert(t == "")
+        Err(_)                 => test.fail("wrong reason for an empty field")
+        Ok(_)                  => test.fail("an empty field is not 0")
+
+@test
+fn test_float_reads_what_the_stdlib_reads() [io]
+    let money = Row { fields: ["fee", "1.25"], line: 2, index: 0 }
+    let cols = Header { names: ["item", "amount"] }
+
+    test.case("float_at")
+    match record.float_at(money, 1)
+        Ok(f)  => test.assert(f == 1.25)
+        Err(_) => test.fail("`1.25` is a float")
+
+    test.case("float_of by header name")
+    match record.float_of(money, cols, "amount")
+        Ok(f)  => test.assert(f == 1.25)
+        Err(_) => test.fail("`amount` is 1.25")
+
+    test.case("an exponent is accepted")
+    let sci = Row { fields: ["2.5e3"], line: 3, index: 1 }
+    match record.float_at(sci, 0)
+        Ok(f)  => test.assert(f == 2500.0)
+        Err(_) => test.fail("`2.5e3` is a float")
+
+    test.case("`inf` is a truncated word, not a number")
+    let inf = Row { fields: ["inf"], line: 4, index: 2 }
+    match record.float_at(inf, 0)
+        Err(NotAFloat(_, _, t)) => test.assert(t == "inf")
+        Err(_)                  => test.fail("wrong reason for `inf`")
+        Ok(_)                   => test.fail("`inf` is refused on purpose")
+
+@test
+fn test_bool_accepts_the_set_the_doc_names() [io]
+    let paid = Header { names: ["item", "paid"] }
+
+    test.case("bool_at over the true spellings")
+    for t in ["true", "TRUE", "t", "yes", "Y", "1"]
+        let r = Row { fields: [t], line: 2, index: 0 }
+        match record.bool_at(r, 0)
+            Ok(b)  => test.assert(b)
+            Err(_) => test.fail("`${t}` is one of the accepted true spellings")
+
+    test.case("bool_at over the false spellings")
+    for f in ["false", "FALSE", "f", "no", "N", "0"]
+        let r = Row { fields: [f], line: 2, index: 0 }
+        match record.bool_at(r, 0)
+            Ok(b)  => test.assert(b == false)
+            Err(_) => test.fail("`${f}` is one of the accepted false spellings")
+
+    test.case("bool_of by header name")
+    let row = Row { fields: ["fee", "yes"], line: 2, index: 0 }
+    match record.bool_of(row, paid, "paid")
+        Ok(b)  => test.assert(b)
+        Err(_) => test.fail("`paid` is yes")
+
+    test.case("an empty cell is not false")
+    let blank = Row { fields: [""], line: 7, index: 5 }
+    match record.bool_at(blank, 0)
+        Err(NotABool(l, _, t)) =>
+            test.assert(l == 7)
+            test.assert(t == "")
+        Err(_)                 => test.fail("wrong reason for an empty cell")
+        Ok(_)                  => test.fail("an empty cell means nobody said, not false")
+
+@test
+fn test_a_typed_failure_carries_the_records_position() [io]
+    test.case("the error's line is the record's line")
+    let r = Row { fields: ["x", "not-a-number"], line: 4812, index: 900 }
+    match record.int_at(r, 1)
+        Err(e) => test.assert(csverror.line_of(e) == 4812)
+        Ok(_)  => test.fail("`not-a-number` is not an integer")

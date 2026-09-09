@@ -1,0 +1,114 @@
+// dialect_tests.nv — the API suite for the dialect value.
+//
+// RED ON PURPOSE.  Every body in this package is a `todo()`, so every
+// assertion below reaches `not implemented: csv-nv.<fn>` and the suite
+// fails.  That is the expected state of an interface package and it is
+// what makes these tests worth writing NOW: they compile against the
+// signatures, which is the claim being reviewed, and the day a body
+// lands the suite says whether the body agrees with what was promised.
+
+use std.test
+use dialect
+use csverror
+
+@test
+fn test_rfc4180_is_the_rfc() [io]
+    test.case("rfc4180 spells the RFC's own bytes")
+    let d = dialect.rfc4180()
+    test.assert(d.delim == 0x2C)
+    test.assert(d.quote == 0x22)
+    test.assert(d.escape == -1)
+    test.assert(d.comment == -1)
+    test.assert(d.trim == false)
+    test.assert(d.strict == false)
+    test.assert(d.has_header)
+
+@test
+fn test_tsv_changes_only_the_delimiter() [io]
+    test.case("tsv is rfc4180 with a tab")
+    let t = dialect.tsv()
+    let r = dialect.rfc4180()
+    test.assert(t.delim == 0x09)
+    test.assert(t.quote == r.quote)
+    test.assert(t.escape == r.escape)
+
+@test
+fn test_every_builder_changes_one_field() [io]
+    let base = dialect.rfc4180()
+
+    test.case("with_delim")
+    test.assert(dialect.with_delim(base, 0x3B).delim == 0x3B)
+
+    test.case("with_quote")
+    test.assert(dialect.with_quote(base, 0x27).quote == 0x27)
+
+    test.case("with_escape")
+    test.assert(dialect.with_escape(base, 0x5C).escape == 0x5C)
+
+    test.case("with_comment")
+    test.assert(dialect.with_comment(base, 0x23).comment == 0x23)
+
+    test.case("with_header")
+    test.assert(dialect.with_header(base, false).has_header == false)
+
+    test.case("with_trim")
+    test.assert(dialect.with_trim(base, true).trim)
+
+    test.case("with_strict")
+    test.assert(dialect.with_strict(base, true).strict)
+
+    test.case("with_max_field")
+    test.assert(dialect.with_max_field(base, 4096).max_field == 4096)
+
+@test
+fn test_a_builder_leaves_the_other_fields_alone() [io]
+    test.case("with_delim does not move the quote")
+    let base = dialect.rfc4180()
+    let d = dialect.with_delim(base, 0x3B)
+    test.assert(d.quote == base.quote)
+    test.assert(d.has_header == base.has_header)
+    test.assert(d.max_field == base.max_field)
+
+@test
+fn test_check_accepts_the_defaults() [io]
+    test.case("check(rfc4180) is None")
+    match dialect.check(dialect.rfc4180())
+        None    => test.assert(true)
+        Some(_) => test.fail("rfc4180 refused by its own validator")
+    test.case("check(tsv) is None")
+    match dialect.check(dialect.tsv())
+        None    => test.assert(true)
+        Some(_) => test.fail("tsv refused by its own validator")
+
+@test
+fn test_check_refuses_an_ambiguous_scanner() [io]
+    test.case("delimiter equal to the quote")
+    match dialect.check(dialect.with_quote(dialect.rfc4180(), 0x2C))
+        Some(BadDialect(_)) => test.assert(true)
+        Some(_)             => test.fail("refused for the wrong reason")
+        None                => test.fail("an ambiguous dialect was accepted")
+
+    test.case("comment byte equal to the delimiter")
+    match dialect.check(dialect.with_comment(dialect.rfc4180(), 0x2C))
+        Some(BadDialect(_)) => test.assert(true)
+        Some(_)             => test.fail("refused for the wrong reason")
+        None                => test.fail("an ambiguous dialect was accepted")
+
+    test.case("a delimiter that is not a byte")
+    match dialect.check(dialect.with_delim(dialect.rfc4180(), 300))
+        Some(BadDialect(_)) => test.assert(true)
+        Some(_)             => test.fail("refused for the wrong reason")
+        None                => test.fail("a non-byte delimiter was accepted")
+
+    test.case("a negative field bound")
+    match dialect.check(dialect.with_max_field(dialect.rfc4180(), -1))
+        Some(BadDialect(_)) => test.assert(true)
+        Some(_)             => test.fail("refused for the wrong reason")
+        None                => test.fail("a negative bound was accepted")
+
+@test
+fn test_a_bad_dialect_has_no_position() [io]
+    test.case("BadDialect is not about a place in the file")
+    let e = BadDialect("delimiter equals quote")
+    test.assert(csverror.line_of(e) == -1)
+    test.assert(csverror.col_of(e) == -1)
