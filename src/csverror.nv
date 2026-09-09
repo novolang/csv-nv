@@ -11,11 +11,23 @@
 // `line_of` answers `-1` for them rather than `0`, because line 0 does
 // not exist and a caller that prints it has been told nothing.
 //
-// Lines are 1-based and columns are 1-based BYTE offsets into the
-// line, which is what an editor's status bar shows and what a `sed -n`
-// can jump to.  Not character offsets: this package never decodes, and
-// a byte offset it can always produce is worth more than a character
-// offset it would have to guess at on invalid UTF-8.
+// Lines are 1-based.  Columns are 1-based and mean one of two things,
+// depending on who raised the error, and the difference is worth
+// stating because it is the one place this package cannot give a
+// single answer:
+//
+//   - THE SCANNER's errors — `UnterminatedQuote`, `BareQuote`,
+//     `FieldTooLong` — carry a 1-based BYTE offset into the line, which
+//     is what an editor's status bar shows and what a `sed -n` can jump
+//     to.  Not character offsets: this package never decodes, and a
+//     byte offset it can always produce is worth more than a character
+//     offset it would have to guess at on invalid UTF-8.
+//   - THE TYPED READS — `NotAnInt`, `NotAFloat`, `NotABool` — carry the
+//     1-based FIELD number instead.  `record`'s reads are answered from
+//     a `Row`, and a `Row` is the fields and the line it started on; it
+//     does not carry the line's text, so there is no byte offset to
+//     report and inventing one would be worse than naming the column a
+//     person counts commas to find.
 //
 // THE TRANSPORT VARIANT IS THE LAYER SEAM.  `reader.read_all` takes a
 // stream from its host and the stream can fail; the failure is the
@@ -86,12 +98,30 @@ pub enum CsvError
 //
 // `Result<T, CsvError>` requires it — SPEC § 3.4 makes `Error` the
 // bound on a result's error type — so this impl exists whether or not
-// an interface release has anything to say yet, and its body is a
-// `todo()` like every other body here.
+// an interface release has anything to say yet.
 impl Error for CsvError
-    // Panics with `not implemented` until the bodies land.
     fn message(self) -> Str
-        todo("csv-nv.CsvError.message")
+        match self
+            UnterminatedQuote(l, c) =>
+                "${l}:${c}: a quoted field was never closed"
+            BareQuote(l, c)         =>
+                "${l}:${c}: a quote inside an unquoted field"
+            RaggedRow(l, want, got) =>
+                "${l}: a record of ${got} field(s) where the file is ${want} wide"
+            FieldTooLong(l, c, cap) =>
+                "${l}:${c}: a field longer than the ${cap}-byte bound"
+            NoSuchColumn(name)      =>
+                "no column named `${name}`"
+            NotAnInt(l, c, text)    =>
+                "${l}:${c}: `${text}` is not an integer"
+            NotAFloat(l, c, text)   =>
+                "${l}:${c}: `${text}` is not a number"
+            NotABool(l, c, text)    =>
+                "${l}:${c}: `${text}` is not a boolean"
+            BadDialect(why)         =>
+                "this dialect cannot be read: ${why}"
+            Transport(cause)        =>
+                "the stream failed: ${cause.message()}"
 
 // The 1-based line the error is about, or `-1` when it is not about a
 // place in the file.
@@ -109,10 +139,22 @@ impl Error for CsvError
 //     println("${csverror.line_of(NoSuchColumn("amount"))}")   // -1
 // ```
 pub fn line_of(e: CsvError) -> Int
-    todo("csv-nv.line_of")
+    match e
+        UnterminatedQuote(l, _) => l
+        BareQuote(l, _)         => l
+        RaggedRow(l, _, _)      => l
+        FieldTooLong(l, _, _)   => l
+        NotAnInt(l, _, _)       => l
+        NotAFloat(l, _, _)      => l
+        NotABool(l, _, _)       => l
+        NoSuchColumn(_)         => -1
+        BadDialect(_)           => -1
+        Transport(_)            => -1
 
-// The 1-based byte column the error is about, or `-1` when it is not
-// about a place in the file.
+// The 1-based column the error is about, or `-1` when it is not about
+// a place in the file.  A byte offset into the line for the scanner's
+// errors, a field number for the typed reads — the module comment says
+// why the two cannot be one answer.
 //
 // `RaggedRow` has a line but no column — the record is the wrong
 // width, and no single byte in it is the reason — so it answers `-1`
@@ -127,4 +169,14 @@ pub fn line_of(e: CsvError) -> Int
 //     println("${csverror.col_of(RaggedRow(12, 5, 4))}")       // -1
 // ```
 pub fn col_of(e: CsvError) -> Int
-    todo("csv-nv.col_of")
+    match e
+        UnterminatedQuote(_, c) => c
+        BareQuote(_, c)         => c
+        FieldTooLong(_, c, _)   => c
+        NotAnInt(_, c, _)       => c
+        NotAFloat(_, c, _)      => c
+        NotABool(_, c, _)       => c
+        RaggedRow(_, _, _)      => -1
+        NoSuchColumn(_)         => -1
+        BadDialect(_)           => -1
+        Transport(_)            => -1

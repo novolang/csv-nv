@@ -29,6 +29,17 @@
 // before it reads a byte — which means a contradictory dialect is
 // reported at the file, with a reason, rather than parsed around.
 
+// The largest byte value, and the sentinel one below the smallest.
+// Spelled once so that `check`'s four range tests read as one rule.
+const BYTE_MAX: Int = 255
+const NO_BYTE: Int = -1
+
+// One mebibyte, the default bound on a single field.  Big enough that
+// no honest CSV file meets it, small enough that a file with one
+// unclosed quote is refused after a megabyte rather than after the
+// whole of itself.
+const DEFAULT_MAX_FIELD: Int = 1048576
+
 // How to read or write one comma-separated file.
 //
 // Build one from `rfc4180()` or `tsv()` and change what differs; the
@@ -92,7 +103,9 @@ pub struct Dialect
 //     println("${d.delim} ${d.quote}")         // 44 34
 // ```
 pub fn rfc4180() -> Dialect
-    todo("csv-nv.rfc4180")
+    Dialect { delim: 0x2C, quote: 0x22, escape: NO_BYTE, comment: NO_BYTE,
+              has_header: true, trim: false, strict: false,
+              max_field: DEFAULT_MAX_FIELD }
 
 // Tab-separated, otherwise RFC 4180.  The delimiter is `0x09` and
 // nothing else changes, which is what `csv.excel_tab` means in
@@ -109,7 +122,7 @@ pub fn rfc4180() -> Dialect
 //     println("${dialect.tsv().delim}")        // 9
 // ```
 pub fn tsv() -> Dialect
-    todo("csv-nv.tsv")
+    with_delim(rfc4180(), 0x09)
 
 // The same dialect with a different field separator.
 //
@@ -121,7 +134,9 @@ pub fn tsv() -> Dialect
 //     println("${d.delim}")                    // 124
 // ```
 pub fn with_delim(d: Dialect, byte: Int) -> Dialect
-    todo("csv-nv.with_delim")
+    Dialect { delim: byte, quote: d.quote, escape: d.escape,
+              comment: d.comment, has_header: d.has_header, trim: d.trim,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect with a different quote byte.
 //
@@ -133,7 +148,9 @@ pub fn with_delim(d: Dialect, byte: Int) -> Dialect
 //     println("${d.quote}")                    // 39
 // ```
 pub fn with_quote(d: Dialect, byte: Int) -> Dialect
-    todo("csv-nv.with_quote")
+    Dialect { delim: d.delim, quote: byte, escape: d.escape,
+              comment: d.comment, has_header: d.has_header, trim: d.trim,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect with a backslash-style escape byte, or `-1` to go
 // back to RFC 4180's doubled quotes.
@@ -150,7 +167,9 @@ pub fn with_quote(d: Dialect, byte: Int) -> Dialect
 //     println("${d.escape}")                   // 92
 // ```
 pub fn with_escape(d: Dialect, byte: Int) -> Dialect
-    todo("csv-nv.with_escape")
+    Dialect { delim: d.delim, quote: d.quote, escape: byte,
+              comment: d.comment, has_header: d.has_header, trim: d.trim,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect with a comment byte, or `-1` for none.
 //
@@ -162,7 +181,9 @@ pub fn with_escape(d: Dialect, byte: Int) -> Dialect
 //     println("${d.comment}")                  // 35
 // ```
 pub fn with_comment(d: Dialect, byte: Int) -> Dialect
-    todo("csv-nv.with_comment")
+    Dialect { delim: d.delim, quote: d.quote, escape: d.escape,
+              comment: byte, has_header: d.has_header, trim: d.trim,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect, reading the first record as a header or not.
 //
@@ -174,7 +195,9 @@ pub fn with_comment(d: Dialect, byte: Int) -> Dialect
 //     println("${d.has_header}")               // false
 // ```
 pub fn with_header(d: Dialect, on: Bool) -> Dialect
-    todo("csv-nv.with_header")
+    Dialect { delim: d.delim, quote: d.quote, escape: d.escape,
+              comment: d.comment, has_header: on, trim: d.trim,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect, trimming unquoted fields or not.
 //
@@ -185,7 +208,9 @@ pub fn with_header(d: Dialect, on: Bool) -> Dialect
 //     println("${dialect.with_trim(dialect.rfc4180(), true).trim}")
 // ```
 pub fn with_trim(d: Dialect, on: Bool) -> Dialect
-    todo("csv-nv.with_trim")
+    Dialect { delim: d.delim, quote: d.quote, escape: d.escape,
+              comment: d.comment, has_header: d.has_header, trim: on,
+              strict: d.strict, max_field: d.max_field }
 
 // The same dialect, refusing what RFC 4180 forbids or reading it
 // leniently.
@@ -197,7 +222,9 @@ pub fn with_trim(d: Dialect, on: Bool) -> Dialect
 //     println("${dialect.with_strict(dialect.rfc4180(), true).strict}")
 // ```
 pub fn with_strict(d: Dialect, on: Bool) -> Dialect
-    todo("csv-nv.with_strict")
+    Dialect { delim: d.delim, quote: d.quote, escape: d.escape,
+              comment: d.comment, has_header: d.has_header, trim: d.trim,
+              strict: on, max_field: d.max_field }
 
 // The same dialect with a different single-field bound, or `0` for
 // unbounded.
@@ -210,7 +237,17 @@ pub fn with_strict(d: Dialect, on: Bool) -> Dialect
 //     println("${d.max_field}")                // 4096
 // ```
 pub fn with_max_field(d: Dialect, bytes: Int) -> Dialect
-    todo("csv-nv.with_max_field")
+    Dialect { delim: d.delim, quote: d.quote, escape: d.escape,
+              comment: d.comment, has_header: d.has_header, trim: d.trim,
+              strict: d.strict, max_field: bytes }
+
+// True when `b` is a byte the scanner could meet in a file.
+fn is_byte(b: Int) -> Bool
+    b >= 0 and b <= BYTE_MAX
+
+// True when `b` is a byte or the `-1` that turns a feature off.
+fn is_byte_or_off(b: Int) -> Bool
+    b == NO_BYTE or is_byte(b)
 
 // `None` when the dialect is usable, and the reason when it is not.
 //
@@ -234,4 +271,23 @@ pub fn with_max_field(d: Dialect, bytes: Int) -> Dialect
 //         None    => println("fine")
 // ```
 pub fn check(d: Dialect) -> ?CsvError
-    todo("csv-nv.check")
+    if not is_byte(d.delim)
+        Some(BadDialect("the delimiter ${d.delim} is not a byte in 0..=255"))
+    else if not is_byte(d.quote)
+        Some(BadDialect("the quote ${d.quote} is not a byte in 0..=255"))
+    else if not is_byte_or_off(d.escape)
+        Some(BadDialect("the escape ${d.escape} is neither a byte nor -1"))
+    else if not is_byte_or_off(d.comment)
+        Some(BadDialect("the comment byte ${d.comment} is neither a byte nor -1"))
+    else if d.delim == d.quote
+        Some(BadDialect("the delimiter and the quote are both ${d.delim}"))
+    else if d.delim == d.escape
+        Some(BadDialect("the delimiter and the escape are both ${d.delim}"))
+    else if d.delim == d.comment
+        Some(BadDialect("the delimiter and the comment byte are both ${d.delim}"))
+    else if d.quote == d.escape
+        Some(BadDialect("the quote and the escape are both ${d.quote}"))
+    else if d.max_field < 0
+        Some(BadDialect("a field bound of ${d.max_field} bounds nothing; 0 is unbounded"))
+    else
+        None

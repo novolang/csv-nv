@@ -26,8 +26,28 @@
 // around: quoting is applied where the dialect requires it and nowhere
 // else, and a field holding the delimiter, the quote byte, a CR or an
 // LF is always quoted.
+//
+// A WRITER THAT CANNOT WRITE EMITS NOTHING.  Three refusals, all of
+// them the empty byte string and an unchanged writer, because there is
+// no error channel on a `(Writer, Bytes)`: a dialect `dialect.check`
+// refuses, a header after the first record, and — under a `strict`
+// dialect — a record of a different width from the first.  The writer
+// is a value the caller threads, so a refusal is visible as a `rows`
+// that did not move.
 
 use dialect
+
+// The two bytes RFC 4180 § 2.1 terminates a record with, and the
+// string they spell.  Not a dialect field: a writer whose line ending
+// varied is a writer whose output nobody can predict from the dialect
+// they were handed.
+const BYTE_CR: Int = 13
+const BYTE_LF: Int = 10
+const TERMINATOR: Str = "\r\n"
+
+// The `escape` a dialect carries when it has none and RFC 4180's
+// doubling applies.
+const NO_ESCAPE: Int = -1
 
 // A CSV writer between records.
 //
@@ -64,7 +84,17 @@ pub struct Writer
 //     println("${w.width}")                    // -1
 // ```
 pub fn writer(d: Dialect) -> Writer
-    todo("csv-nv.writer")
+    Writer { dialect: d, rows: 0, width: -1 }
+
+// True when this dialect is one a file can be written in.
+//
+// The same `dialect.check` the reader calls, read as a boolean because
+// a writer has nowhere to put the reason: it answers `(Writer, Bytes)`
+// and the refusal is the empty `Bytes`.
+fn usable(d: Dialect) -> Bool
+    match dialect.check(d)
+        Some(_) => false
+        None    => true
 
 // The header record, as bytes.
 //
@@ -85,7 +115,10 @@ pub fn writer(d: Dialect) -> Writer
 //     println("${bytes.len(out)}")             // 10 — "name,age\r\n"
 // ```
 pub fn write_header(w: Writer, head: Header) -> (Writer, Bytes)
-    todo("csv-nv.write_header")
+    if w.rows != 0
+        (w, bytes.from_str(""))
+    else
+        write_row(w, head.names)
 
 // One record, as bytes, terminated.
 //
@@ -110,7 +143,19 @@ pub fn write_header(w: Writer, head: Header) -> (Writer, Bytes)
 //     println("${bytes.len(out)}")             // quoted second field
 // ```
 pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
-    todo("csv-nv.write_row")
+    if not usable(w.dialect)
+        return (w, bytes.from_str(""))
+    if w.dialect.strict and w.width >= 0 and list.len(fields) != w.width
+        return (w, bytes.from_str(""))
+    var quoted: [Str] = []
+    for f in fields
+        quoted = list.push(quoted, quote_field(w.dialect, f))
+    let text = str.join(quoted, str.from_char(w.dialect.delim)) + TERMINATOR
+    var settled = w.width
+    if settled < 0
+        settled = list.len(fields)
+    let next = Writer { dialect: w.dialect, rows: w.rows + 1, width: settled }
+    (next, bytes.from_str(text))
 
 // Several records, as one run of bytes.
 //
@@ -125,10 +170,16 @@ pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
 // fn main() [io]
 //     let w = writer.writer(dialect.rfc4180())
 //     let (_, out) = writer.write_rows(w, [["a", "b"], ["c", "d"]])
-//     println("${bytes.len(out)}")             // 8 — two CRLF records
+//     println("${bytes.len(out)}")             // 10 — two CRLF records
 // ```
 pub fn write_rows(w: Writer, rows: [[Str]]) -> (Writer, Bytes)
-    todo("csv-nv.write_rows")
+    var cur = w
+    var parts: [Bytes] = []
+    for row in rows
+        let (next, out) = write_row(cur, row)
+        cur = next
+        parts = list.push(parts, out)
+    (cur, bytes.concat(parts))
 
 // Whether this field has to be quoted under this dialect.
 //
@@ -147,15 +198,22 @@ pub fn write_rows(w: Writer, rows: [[Str]]) -> (Writer, Bytes)
 //     println("${writer.needs_quote(dialect.rfc4180(), "alice")}")        // false
 // ```
 pub fn needs_quote(d: Dialect, field: Str) -> Bool
-    todo("csv-nv.needs_quote")
+    let n = str.len(field)
+    for i in 0..n
+        let b = str.byte_at_or(field, i, -1)
+        if b == d.delim or b == d.quote or b == BYTE_CR or b == BYTE_LF
+            return true
+    false
 
 // This field as it will appear in the file: quoted if it has to be,
 // with the inner quotes escaped the way the dialect says.
 //
 // Doubling by default (RFC 4180 § 2.7), or the dialect's `escape` byte
-// when it has one.  Exposed because a caller writing a file this
-// package does not otherwise produce — a header comment, a footer —
-// still needs one field spelled correctly.
+// when it has one — and a dialect with an escape byte escapes that
+// byte too, so that a field holding a backslash comes back holding a
+// backslash.  Exposed because a caller writing a file this package
+// does not otherwise produce — a header comment, a footer — still
+// needs one field spelled correctly.
 //
 // ```novo
 // use writer
@@ -166,4 +224,19 @@ pub fn needs_quote(d: Dialect, field: Str) -> Bool
 //     // "say ""hi"""
 // ```
 pub fn quote_field(d: Dialect, field: Str) -> Str
-    todo("csv-nv.quote_field")
+    if not needs_quote(d, field)
+        return field
+    let q = str.from_char(d.quote)
+    var out = q
+    let n = str.len(field)
+    for i in 0..n
+        let b = str.byte_at_or(field, i, -1)
+        if b == d.quote and d.escape == NO_ESCAPE
+            out = out + q + q
+        else if b == d.quote
+            out = out + str.from_char(d.escape) + q
+        else if b == d.escape
+            out = out + str.from_char(d.escape) + str.from_char(d.escape)
+        else
+            out = out + str.slice(field, i, i + 1)
+    out + q

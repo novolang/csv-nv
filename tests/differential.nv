@@ -1,0 +1,144 @@
+// differential.nv — the same corpus through both legs.
+//
+// Not a `@test` module: it is a program, and the claim it makes is one
+// no single-leg suite can make.  `novo run --interp` and the compiled
+// binary each print the whole corpus, and the two outputs are compared
+// byte for byte:
+//
+//     novo run --interp tests/differential.nv > a.txt
+//     novo run          tests/differential.nv > b.txt
+//     cmp a.txt b.txt
+//
+// A CSV reader is a byte-at-a-time machine over a `Str`, and the two
+// engines' string primitives are the thing most likely to disagree
+// about a byte above 127, an empty slice or a chunk boundary.  The
+// corpus is chosen for those: quoted commas, an embedded newline, CRLF
+// and LF, a chunk split inside a quote and between the CR and the LF,
+// a comment line, a trimmed dialect, and every way the reader refuses.
+
+use reader
+use record
+use writer
+use dialect
+use csverror
+
+// One record on one line: where it started, its number, and its fields
+// with the separator spelled so that an empty field is visible.
+fn show_row(row: Row) -> Str
+    "    line=${row.line} index=${row.index} [" + str.join(row.fields, "][") + "]"
+
+fn show_rows(name: Str, got: Result<[Row], CsvError>) [io]
+    println("== ${name}")
+    match got
+        Ok(rows)  =>
+            println("    rows=${list.len(rows)}")
+            for row in rows
+                println(show_row(row))
+        Err(e)    =>
+            println("    err=${e.message()}")
+            println("    at=${csverror.line_of(e)}:${csverror.col_of(e)}")
+
+// A whole document in one call, under one dialect.
+fn whole(name: Str, text: Str, d: Dialect) [io]
+    show_rows(name, reader.parse(text, d))
+
+// The same document fed in pieces, so that a chunk boundary lands
+// wherever `cut` says.  What it prints has to equal what `whole`
+// printed for the same text.
+fn in_chunks(name: Str, text: Str, cut: Int, d: Dialect) [io]
+    let (r1, first) = reader.feed_str(reader.reader(d), str.slice(text, 0, cut))
+    let (r2, second) = reader.feed_str(r1, str.slice(text, cut, str.len(text)))
+    let both = list.append(first, second)
+    match reader.finish(r2)
+        Ok(last) => show_rows(name, Ok(list.append(both, last)))
+        Err(e)   => show_rows(name, Err(e))
+
+fn headerless() -> Dialect
+    dialect.with_header(dialect.rfc4180(), false)
+
+fn corpus() [io]
+    let plain = headerless()
+
+    whole("empty document", "", plain)
+    whole("one record, no terminator", "bob,25", plain)
+    whole("one record, LF", "bob,25\n", plain)
+    whole("one record, CRLF", "bob,25\r\n", plain)
+    whole("a lone CR ends a line", "a,b\rc,d\r", plain)
+    whole("blank lines are skipped", "a,b\n\n\nc,d\n", plain)
+    whole("an empty quoted field is a record", "\"\"\n", plain)
+    whole("empty fields", ",,\n", plain)
+    whole("a quoted comma", "\"de Vries, A\",29\n", plain)
+    whole("a quoted newline", "\"two\nlines\",1\n", plain)
+    whole("a quoted CRLF", "\"two\r\nlines\",1\n", plain)
+    whole("a doubled quote", "\"say \"\"hi\"\"\",1\n", plain)
+    whole("a bare quote is data", "a\"b,1\n", plain)
+    whole("text after a closing quote", "\"ab\"cd,1\n", plain)
+    whole("a header is consumed", "name,age\nalice,30\nbob,25\n",
+          dialect.rfc4180())
+    whole("a trimmed dialect", "  a  ,  \"  b  \"  \n",
+          dialect.with_trim(plain, true))
+    whole("a comment line", "# note\na,b\n",
+          dialect.with_comment(plain, 0x23))
+    whole("a semicolon dialect", "a;b\n", dialect.with_delim(plain, 0x3B))
+    whole("a tab dialect", "a\tb\n", dialect.with_header(dialect.tsv(), false))
+    whole("a backslash escape", "\"say \\\"hi\\\"\",1\n",
+          dialect.with_escape(plain, 0x5C))
+
+    whole("an unclosed quote", "a,b\n\"open\n", plain)
+    whole("a ragged row under strict", "a,b\nc,d,e\n",
+          dialect.with_strict(plain, true))
+    whole("a bare quote under strict", "a\"b\n",
+          dialect.with_strict(plain, true))
+    whole("a field over the bound", "aaaa,b\n",
+          dialect.with_max_field(plain, 2))
+    whole("an ambiguous dialect", "a,b\n", dialect.with_quote(plain, 0x2C))
+
+    in_chunks("split inside a field", "alice,30\n", 6, plain)
+    in_chunks("split inside a quoted field", "\"de Vries,\nA\",29\n", 7, plain)
+    in_chunks("split between the CR and the LF", "a,b\r\nc,d\r\n", 4, plain)
+    in_chunks("split before the terminator", "a,b\n", 3, plain)
+    in_chunks("split at the very end", "a,b\n", 4, plain)
+
+fn round_trip() [io]
+    let plain = headerless()
+    let fields = [["alice", "de Vries, A"],
+                  ["bob", "say \"hi\""],
+                  ["carol", "two\nlines"],
+                  ["dan", ""],
+                  ["", "cr\rhere"]]
+    let (w, out) = writer.write_rows(writer.writer(plain), fields)
+    println("== written")
+    println("    rows=${w.rows} width=${w.width} bytes=${bytes.len(out)}")
+    show_rows("read back", reader.parse(bytes.to_str(out), plain))
+
+fn typed_reads() [io]
+    println("== typed reads")
+    let head = Header { names: ["n", "i", "f", "b"] }
+    let row = Row { fields: ["x", " -7 ", "2.5e3", "YES"], line: 4, index: 2 }
+    match record.int_of(row, head, "i")
+        Ok(n)  => println("    int=${n}")
+        Err(e) => println("    int err=${e.message()}")
+    match record.float_of(row, head, "f")
+        Ok(f)  => println("    float=${f}")
+        Err(e) => println("    float err=${e.message()}")
+    match record.bool_of(row, head, "b")
+        Ok(b)  => println("    bool=${b}")
+        Err(e) => println("    bool err=${e.message()}")
+    let bad = Row { fields: ["", "inf", "1,234"], line: 9, index: 3 }
+    match record.int_at(bad, 0)
+        Ok(n)  => println("    empty int=${n}")
+        Err(e) => println("    empty int err=${e.message()}")
+    match record.float_at(bad, 1)
+        Ok(f)  => println("    inf=${f}")
+        Err(e) => println("    inf err=${e.message()}")
+    match record.int_at(bad, 2)
+        Ok(n)  => println("    grouped=${n}")
+        Err(e) => println("    grouped err=${e.message()}")
+    match record.field_of(bad, head, "nope")
+        Ok(v)  => println("    missing=${v}")
+        Err(e) => println("    missing err=${e.message()}")
+
+fn main() [io]
+    corpus()
+    round_trip()
+    typed_reads()

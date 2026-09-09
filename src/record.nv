@@ -25,6 +25,20 @@
 // first record rather than after the run.  `?Int` collapses them.
 // `field` stays an option because there is only one way to fail: the
 // index is off the end.
+//
+// WHAT THE `col` OF A TYPED FAILURE IS
+//
+// The 1-based FIELD number, not a byte offset into the line: a `Row`
+// carries its fields and the line it started on, and not the line's
+// text, so there is no byte to point at.  `csverror`'s module comment
+// is where that split is written down.
+
+// The bytes this module names, spelled once so that the scans below
+// read as rules rather than as arithmetic.
+const PLUS: Int = 43
+const MINUS: Int = 45
+const DIGIT_0: Int = 48
+const DIGIT_9: Int = 57
 
 // One parsed record, with the two numbers a message needs.
 //
@@ -84,7 +98,7 @@ pub struct Header
 //     println("${record.width(Row { fields: ["a", "b"], line: 1, index: 0 })}")
 // ```
 pub fn width(row: Row) -> Int
-    todo("csv-nv.width")
+    list.len(row.fields)
 
 // The field at a 0-based index, or `None` past the end.
 //
@@ -101,7 +115,22 @@ pub fn width(row: Row) -> Int
 //         None    => println("no such field")
 // ```
 pub fn field(row: Row, i: Int) -> ?Str
-    todo("csv-nv.field")
+    if i < 0 or i >= list.len(row.fields)
+        None
+    else
+        Some(row.fields[i])
+
+// The field at an index, or the `RaggedRow` that says the record never
+// reached it.
+//
+// The shared first step of every typed read below: they all have to
+// turn a missing field into an error rather than into a `None`, and
+// they all have to blame the same thing when it is missing — a record
+// too short for the index asked of it.
+fn field_or_ragged(row: Row, i: Int) -> Result<Str, CsvError>
+    match field(row, i)
+        Some(v) => Ok(v)
+        None    => Err(RaggedRow(row.line, i + 1, list.len(row.fields)))
 
 // The field under a header name.
 //
@@ -121,7 +150,23 @@ pub fn field(row: Row, i: Int) -> ?Str
 //         Err(_) => println("missing")
 // ```
 pub fn field_of(row: Row, head: Header, name: Str) -> Result<Str, CsvError>
-    todo("csv-nv.field_of")
+    match column(head, name)
+        None    => Err(NoSuchColumn(name))
+        Some(i) =>
+            match field(row, i)
+                Some(v) => Ok(v)
+                None    => Err(RaggedRow(row.line, list.len(head.names),
+                                         list.len(row.fields)))
+
+// The 0-based index of a name the header has, or the `NoSuchColumn`
+// that says it has not.
+//
+// The shared first step of the three by-name reads, which otherwise
+// each spell the same `match` before doing their own work.
+fn column_or_missing(head: Header, name: Str) -> Result<Int, CsvError>
+    match column(head, name)
+        Some(i) => Ok(i)
+        None    => Err(NoSuchColumn(name))
 
 // The field at an index, read as a decimal integer.
 //
@@ -145,7 +190,10 @@ pub fn field_of(row: Row, head: Header, name: Str) -> Result<Str, CsvError>
 //         Err(_) => println("not a number")
 // ```
 pub fn int_at(row: Row, i: Int) -> Result<Int, CsvError>
-    todo("csv-nv.int_at")
+    let text = field_or_ragged(row, i)!
+    match str.to_int(str.trim(text))
+        Some(n) => Ok(n)
+        None    => Err(NotAnInt(row.line, i + 1, text))
 
 // The field under a header name, read as a decimal integer.
 //
@@ -160,7 +208,22 @@ pub fn int_at(row: Row, i: Int) -> Result<Int, CsvError>
 //         Err(_) => println("not a number")
 // ```
 pub fn int_of(row: Row, head: Header, name: Str) -> Result<Int, CsvError>
-    todo("csv-nv.int_of")
+    int_at(row, column_or_missing(head, name)!)
+
+// True when `text` begins the way a decimal number does: an optional
+// sign and then a digit.
+//
+// This is what keeps `inf`, `nan` and a bare `.5` out of `float_at`.
+// `str.to_float` accepts all three, and all three are far more often a
+// truncated field or a spreadsheet's error cell than a number somebody
+// meant to write.
+fn starts_like_a_number(text: Str) -> Bool
+    var at = 0
+    let sign = str.byte_at_or(text, 0, -1)
+    if sign == PLUS or sign == MINUS
+        at = 1
+    let b = str.byte_at_or(text, at, -1)
+    b >= DIGIT_0 and b <= DIGIT_9
 
 // The field at an index, read as a float.
 //
@@ -180,7 +243,13 @@ pub fn int_of(row: Row, head: Header, name: Str) -> Result<Int, CsvError>
 //         Err(_) => println("not a number")
 // ```
 pub fn float_at(row: Row, i: Int) -> Result<Float, CsvError>
-    todo("csv-nv.float_at")
+    let text = field_or_ragged(row, i)!
+    let body = str.trim(text)
+    if not starts_like_a_number(body)
+        return Err(NotAFloat(row.line, i + 1, text))
+    match str.to_float(body)
+        Some(f) => Ok(f)
+        None    => Err(NotAFloat(row.line, i + 1, text))
 
 // The field under a header name, read as a float.
 //
@@ -195,7 +264,7 @@ pub fn float_at(row: Row, i: Int) -> Result<Float, CsvError>
 //         Err(_) => println("not a number")
 // ```
 pub fn float_of(row: Row, head: Header, name: Str) -> Result<Float, CsvError>
-    todo("csv-nv.float_of")
+    float_at(row, column_or_missing(head, name)!)
 
 // The field at an index, read as a boolean.
 //
@@ -208,6 +277,8 @@ pub fn float_of(row: Row, head: Header, name: Str) -> Result<Float, CsvError>
 // said" and turning that into `false` is a decision this package is
 // not entitled to make.
 //
+// Surrounding spaces are ignored, as they are for `int_at`.
+//
 // ```novo
 // use record
 //
@@ -218,7 +289,14 @@ pub fn float_of(row: Row, head: Header, name: Str) -> Result<Float, CsvError>
 //         Err(_) => println("not a boolean")
 // ```
 pub fn bool_at(row: Row, i: Int) -> Result<Bool, CsvError>
-    todo("csv-nv.bool_at")
+    let text = field_or_ragged(row, i)!
+    let word = str.lower(str.trim(text))
+    if word == "true" or word == "t" or word == "yes" or word == "y" or word == "1"
+        Ok(true)
+    else if word == "false" or word == "f" or word == "no" or word == "n" or word == "0"
+        Ok(false)
+    else
+        Err(NotABool(row.line, i + 1, text))
 
 // The field under a header name, read as a boolean.
 //
@@ -233,7 +311,7 @@ pub fn bool_at(row: Row, i: Int) -> Result<Bool, CsvError>
 //         Err(_) => println("not a boolean")
 // ```
 pub fn bool_of(row: Row, head: Header, name: Str) -> Result<Bool, CsvError>
-    todo("csv-nv.bool_of")
+    bool_at(row, column_or_missing(head, name)!)
 
 // This record read as a header.
 //
@@ -250,7 +328,7 @@ pub fn bool_of(row: Row, head: Header, name: Str) -> Result<Bool, CsvError>
 //     println("${record.names(record.header(first))}")
 // ```
 pub fn header(row: Row) -> Header
-    todo("csv-nv.header")
+    Header { names: row.fields }
 
 // The 0-based index of a column name, or `None`.
 //
@@ -270,7 +348,11 @@ pub fn header(row: Row) -> Header
 //         None    => println("no such column")
 // ```
 pub fn column(head: Header, name: Str) -> ?Int
-    todo("csv-nv.column")
+    let n = list.len(head.names)
+    for i in 0..n
+        if head.names[i] == name
+            return Some(i)
+    None
 
 // The column names, in file order.
 //
@@ -282,4 +364,4 @@ pub fn column(head: Header, name: Str) -> ?Int
 //         println(n)
 // ```
 pub fn names(head: Header) -> [Str]
-    todo("csv-nv.names")
+    head.names

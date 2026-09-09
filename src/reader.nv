@@ -33,6 +33,29 @@
 // the direct shape, and it is here so that the ninety per cent of
 // callers who just have a file do not have to write the pump.
 //
+// WHERE RFC 4180 IS SILENT, THIS IS WHAT IT DOES
+//
+// The RFC describes a well-formed file and says nothing about the
+// files people have.  Five decisions, all of them the reading every
+// other library takes, all of them written here so that nobody has to
+// read the scanner to find out:
+//
+//   - A BLANK LINE IS NOT A RECORD.  A line whose terminator arrives
+//     with no field open and none finished is skipped, which is also
+//     what makes the newline at the end of a well-formed file produce
+//     nothing.  A line holding one empty QUOTED field (`""`) is a
+//     record of one empty field: the quotes are what say so.
+//   - A FILE MAY END WITHOUT A TERMINATOR (§ 2.2 makes it optional).
+//     `finish` is where that last record comes out.
+//   - A LONE CR ENDS A LINE.  The RFC's terminator is CRLF; a file
+//     that lost its LFs is still a file, so a CR ends the record and a
+//     following LF is its second half rather than a blank line.
+//   - A BARE QUOTE IN AN UNQUOTED FIELD (§ 2.5 forbids it) is data
+//     under a lenient dialect and `BareQuote` under a strict one.  So
+//     is text after a closing quote, which is the same defect seen
+//     from the other side.
+//   - AN EMPTY DOCUMENT is zero records, not one empty one.
+//
 // WHAT THIS PACKAGE IS NOT
 //
 // It does not decode.  A field is bytes that came out of the file with
@@ -44,6 +67,40 @@
 
 use dialect
 use record
+
+// The two bytes that end a line, named once.
+const LF: Int = 10
+const CR: Int = 13
+
+// Where the scanner is.  `Reader.state` is one of these, as an `Int`
+// so that the whole reader stays copyable cheaply.
+//
+// The two that are not in the informal description of a CSV scanner
+// are the ones a CHUNK BOUNDARY forces into existence: a CR whose LF
+// may be in the next chunk, and an escape byte whose escaped byte may
+// be.  A machine that a chunk may split anywhere has to be able to
+// stop between any two bytes, including those two.
+const S_FIELD_START: Int = 0
+const S_UNQUOTED: Int = 1
+const S_QUOTED: Int = 2
+const S_QUOTE_SEEN: Int = 3
+const S_COMMENT: Int = 4
+const S_CR: Int = 5
+const S_ESCAPE: Int = 6
+
+// The sticky failure a reader carries, as a code.  `error` reads one
+// back as the `CsvError` it stands for, with the position and the
+// bound the reader recorded beside it.
+//
+// `UnterminatedQuote` is not among them because no `feed` can produce
+// it: a quoted field that is still open at the end of a chunk is a
+// quoted field that the next chunk may close.  Only `finish` knows
+// there is no next chunk.
+const F_NONE: Int = -1
+const F_BAD_DIALECT: Int = 0
+const F_BARE_QUOTE: Int = 1
+const F_RAGGED: Int = 2
+const F_FIELD_TOO_LONG: Int = 3
 
 // A CSV reader between chunks.
 //
@@ -68,28 +125,46 @@ pub struct Reader
     // separator AND on a newline inside a quoted field, because it is
     // a position in the file, not a record count.
     line: Int
-    // The 1-based byte column within that line.
+    // The 1-based byte column within that line — the column of the
+    // NEXT byte to be fed, which is `1` on a reader that has just met
+    // a line break.
     col: Int
     // How many records have been EMITTED, header excluded.  The next
     // `Row` gets this as its `index`.
     index: Int
-    // Where the scanner is: at the start of a field, inside an
-    // unquoted field, inside a quoted field, just after a quote inside
-    // a quoted field, or inside a comment line.  An `Int` rather than
-    // an enum so that the whole reader stays copyable cheaply.
+    // Where the scanner is: one of the `S_*` codes above.
     state: Int
     // Fields of the record currently being built, complete so far.
     pending: [Str]
     // The bytes of the field currently being built.
     partial: Str
     // The header, once `has_header` has consumed it; empty before.
+    // Empty is also what says it has not been consumed, which is why a
+    // blank line is skipped rather than becoming a header of one empty
+    // name.
     head: [Str]
+    // The line the record currently being built started on.  Not
+    // derivable from `line`, which a quoted newline has already moved
+    // on; it is what a `Row` carries and what a person is sent to.
+    row_line: Int
+    // The line the field currently being built started on, and the
+    // column it started at.  For a quoted field that is the opening
+    // quote — the byte `UnterminatedQuote` sends a person to, and the
+    // one place a scanner cannot recompute once it has read past it.
+    field_line: Int
+    field_col: Int
+    // How many fields wide this file is, or `-1` before the first
+    // record settled it.  Under a `strict` dialect it is what a later
+    // record is measured against, and it is `RaggedRow`'s `want`.
+    width: Int
     // The sticky failure, or `-1`.  `error` reads it back as a
     // `CsvError` with the position it was recorded at.
     failed: Int
     // The line the sticky failure was recorded at, or `-1`.
     failed_line: Int
-    // The column the sticky failure was recorded at, or `-1`.
+    // The column the sticky failure was recorded at, or `-1`.  For a
+    // `RaggedRow` it is the width the record actually had, which has
+    // no column to name.
     failed_col: Int
 
 // A reader at the start of a file.
@@ -112,7 +187,86 @@ pub struct Reader
 //         None    => println("ready")
 // ```
 pub fn reader(d: Dialect) -> Reader
-    todo("csv-nv.reader")
+    var code = F_NONE
+    match dialect.check(d)
+        Some(_) =>
+            code = F_BAD_DIALECT
+        None    =>
+            code = F_NONE
+    Reader { dialect: d, line: 1, col: 1, index: 0, state: S_FIELD_START,
+             pending: [], partial: "", head: [],
+             row_line: 1, field_line: 1, field_col: 1, width: -1,
+             failed: code, failed_line: -1, failed_col: -1 }
+
+// The offset one past the run of ordinary bytes beginning at `from` —
+// bytes that are neither of the two the current state stops on, nor a
+// line break.
+//
+// The scanner appends a run at a time rather than a byte at a time,
+// which is what keeps a field's cost linear in its length: `partial +
+// one byte` allocates a fresh string per byte, and over a file of a
+// million records that is the whole difference.  Line breaks are left
+// out of every run so that the line and column bookkeeping stays in
+// one place — the byte-at-a-time path.
+fn run_end(chunk: Str, from: Int, n: Int, stop1: Int, stop2: Int) -> Int
+    var j = from
+    while j < n
+        let c = str.byte_at_or(chunk, j, -1)
+        if c == stop1 or c == stop2 or c == LF or c == CR
+            return j
+        j = j + 1
+    j
+
+// One UNQUOTED field as it will be handed back: trimmed, if the
+// dialect says so.
+//
+// A quoted field never comes through here.  RFC 4180 § 2.4 makes the
+// space part of the field and the quotes are what say it was meant, so
+// `trim` is about the fields nobody quoted.
+fn close_field(d: Dialect, text: Str) -> Str
+    if d.trim
+        str.trim(text)
+    else
+        text
+
+// What finishing one record produced.
+//
+// A struct because the alternative is the block below written twice —
+// once for the record a `feed` completed, once for the record `finish`
+// releases — and two copies of "is this the header, is it the right
+// width, what number does it get" are two copies that drift.
+struct CsvEmit
+    rows: [Row]
+    head: [Str]
+    index: Int
+    width: Int
+    failed: Int
+    failed_line: Int
+    failed_col: Int
+
+// The one place a completed record becomes a `Row`, a header, or a
+// `RaggedRow`.
+fn emit_record(d: Dialect, fields: [Str], row_line: Int, rows: [Row], head: [Str], index: Int,
+               width: Int) -> CsvEmit
+    if d.has_header and list.len(head) == 0
+        // The first record of a `has_header` file is consumed rather
+        // than emitted, and it is also what settles the width the rest
+        // of the file is measured against.
+        CsvEmit { rows: rows, head: fields, index: index,
+                  width: list.len(fields), failed: F_NONE,
+                  failed_line: -1, failed_col: -1 }
+    else if d.strict and width >= 0 and list.len(fields) != width
+        CsvEmit { rows: rows, head: head, index: index, width: width,
+                  failed: F_RAGGED, failed_line: row_line,
+                  failed_col: list.len(fields) }
+    else
+        var settled = width
+        if settled < 0
+            settled = list.len(fields)
+        let row = Row { fields: fields, line: row_line, index: index }
+        CsvEmit { rows: list.push(rows, row), head: head,
+                  index: index + 1, width: settled, failed: F_NONE,
+                  failed_line: -1, failed_col: -1 }
 
 // Feed the next chunk; get back the reader to feed the chunk after it,
 // and every record those bytes COMPLETED.
@@ -141,13 +295,15 @@ pub fn reader(d: Dialect) -> Reader
 //     println("${list.len(rows)}")             // 1
 // ```
 pub fn feed(r: Reader, chunk: Bytes) -> (Reader, [Row])
-    todo("csv-nv.feed")
+    feed_str(r, bytes.to_str(chunk))
 
 // `feed` for a caller who has a `Str`.
 //
 // The same machine — the string is read as its bytes — and it exists
 // because a caller who has already read a file into a string should
-// not have to convert it back to bytes to hand it over.
+// not have to convert it back to bytes to hand it over.  It is also
+// where the machine itself is written: `feed` is this function over
+// `bytes.to_str`, which is a re-tag rather than a copy.
 //
 // ```novo
 // use reader
@@ -159,7 +315,221 @@ pub fn feed(r: Reader, chunk: Bytes) -> (Reader, [Row])
 //     println("${list.len(rows)}")             // 2
 // ```
 pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
-    todo("csv-nv.feed_str")
+    if r.failed != F_NONE
+        return (r, [])
+
+    let d = r.dialect
+    var line = r.line
+    var col = r.col
+    var index = r.index
+    var state = r.state
+    var pending = r.pending
+    var partial = r.partial
+    var head = r.head
+    var row_line = r.row_line
+    var field_line = r.field_line
+    var field_col = r.field_col
+    var width = r.width
+    var failed = F_NONE
+    var failed_line = -1
+    var failed_col = -1
+    var rows: [Row] = []
+
+    let n = str.len(chunk)
+    var i = 0
+    while i < n and failed == F_NONE
+        let b = str.byte_at_or(chunk, i, -1)
+        // Whether this byte was consumed by this pass, and whether it
+        // ended a record.  A byte the CR state hands back is looked at
+        // twice — once to release the record the CR finished, once as
+        // the first byte of the record after it.
+        var eaten = true
+        var complete = false
+
+        if state == S_CR
+            // The CR already ended the line and already closed the
+            // field; what is left is to release the record it finished
+            // and to swallow the LF of a CRLF.
+            state = S_FIELD_START
+            complete = list.len(pending) > 0
+            eaten = b == LF
+        else if state == S_COMMENT
+            if b == LF
+                state = S_FIELD_START
+                line = line + 1
+                col = 1
+            else if b == CR
+                state = S_CR
+                line = line + 1
+                col = 1
+            else
+                col = col + 1
+        else if state == S_ESCAPE
+            // Whatever follows the escape byte is data, including a
+            // quote, a delimiter and the escape byte itself.
+            partial = partial + str.slice(chunk, i, i + 1)
+            state = S_QUOTED
+            if b == LF
+                line = line + 1
+                col = 1
+            else
+                col = col + 1
+        else if state == S_QUOTED
+            if b == d.escape
+                state = S_ESCAPE
+                col = col + 1
+            else if b == d.quote
+                state = S_QUOTE_SEEN
+                col = col + 1
+            else if b == LF
+                partial = partial + str.slice(chunk, i, i + 1)
+                line = line + 1
+                col = 1
+            else if b == CR
+                // A CR inside a quoted field is data, and it is the LF
+                // beside it that moves the line on.
+                partial = partial + str.slice(chunk, i, i + 1)
+                col = col + 1
+            else
+                let j = run_end(chunk, i, n, d.quote, d.escape)
+                partial = partial + str.slice(chunk, i, j)
+                col = col + (j - i)
+                i = j - 1
+        else if state == S_QUOTE_SEEN
+            if b == d.quote
+                // RFC 4180 § 2.7: a doubled quote is one quote of data.
+                partial = partial + str.slice(chunk, i, i + 1)
+                state = S_QUOTED
+                col = col + 1
+            else if b == d.delim
+                pending = list.push(pending, partial)
+                partial = ""
+                state = S_FIELD_START
+                col = col + 1
+            else if b == LF
+                pending = list.push(pending, partial)
+                partial = ""
+                state = S_FIELD_START
+                complete = true
+                line = line + 1
+                col = 1
+            else if b == CR
+                pending = list.push(pending, partial)
+                partial = ""
+                state = S_CR
+                line = line + 1
+                col = 1
+            else if d.strict
+                // Text after a closing quote is the same defect as a
+                // bare quote inside an unquoted field, seen from the
+                // other side; the position is the byte that should
+                // have ended the field.
+                failed = F_BARE_QUOTE
+                failed_line = line
+                failed_col = col
+            else
+                partial = partial + str.slice(chunk, i, i + 1)
+                state = S_UNQUOTED
+                col = col + 1
+        else if state == S_UNQUOTED
+            if b == d.delim
+                pending = list.push(pending, close_field(d, partial))
+                partial = ""
+                state = S_FIELD_START
+                col = col + 1
+            else if b == LF
+                pending = list.push(pending, close_field(d, partial))
+                partial = ""
+                state = S_FIELD_START
+                complete = true
+                line = line + 1
+                col = 1
+            else if b == CR
+                pending = list.push(pending, close_field(d, partial))
+                partial = ""
+                state = S_CR
+                line = line + 1
+                col = 1
+            else if b == d.quote
+                if d.strict
+                    failed = F_BARE_QUOTE
+                    failed_line = line
+                    failed_col = col
+                else
+                    partial = partial + str.slice(chunk, i, i + 1)
+                    col = col + 1
+            else
+                let j = run_end(chunk, i, n, d.delim, d.quote)
+                partial = partial + str.slice(chunk, i, j)
+                col = col + (j - i)
+                i = j - 1
+        else
+            // S_FIELD_START — the byte begins a field, and if nothing
+            // of this record has been read yet it begins the record.
+            if list.len(pending) == 0
+                row_line = line
+            field_line = line
+            field_col = col
+            if b == d.comment and col == 1 and list.len(pending) == 0
+                state = S_COMMENT
+                col = col + 1
+            else if b == d.quote
+                state = S_QUOTED
+                col = col + 1
+            else if b == d.delim
+                pending = list.push(pending, "")
+                col = col + 1
+            else if b == LF
+                // A blank line is not a record; a line that has
+                // already produced a field ends with an empty one.
+                if list.len(pending) > 0
+                    pending = list.push(pending, "")
+                    complete = true
+                line = line + 1
+                col = 1
+            else if b == CR
+                if list.len(pending) > 0
+                    pending = list.push(pending, "")
+                state = S_CR
+                line = line + 1
+                col = 1
+            else
+                state = S_UNQUOTED
+                let j = run_end(chunk, i, n, d.delim, d.quote)
+                partial = partial + str.slice(chunk, i, j)
+                col = col + (j - i)
+                i = j - 1
+
+        if complete
+            let done = emit_record(d, pending, row_line, rows, head, index, width)
+            rows = done.rows
+            head = done.head
+            index = done.index
+            width = done.width
+            failed = done.failed
+            failed_line = done.failed_line
+            failed_col = done.failed_col
+            pending = []
+            partial = ""
+
+        // The bound exists so that a file with one unclosed quote is
+        // refused after a megabyte rather than after the whole of
+        // itself, so it is checked as the field grows.
+        if failed == F_NONE and d.max_field > 0 and str.len(partial) > d.max_field
+            failed = F_FIELD_TOO_LONG
+            failed_line = field_line
+            failed_col = field_col
+
+        if eaten
+            i = i + 1
+
+    let next = Reader { dialect: d, line: line, col: col, index: index,
+                        state: state, pending: pending, partial: partial,
+                        head: head, row_line: row_line,
+                        field_line: field_line, field_col: field_col,
+                        width: width, failed: failed,
+                        failed_line: failed_line, failed_col: failed_col }
+    (next, rows)
 
 // End of stream: the last record, if the file did not end with a
 // separator, and the verdict.
@@ -185,7 +555,43 @@ pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
 //         Err(_)   => println("bad file")
 // ```
 pub fn finish(r: Reader) -> Result<[Row], CsvError>
-    todo("csv-nv.finish")
+    match error(r)
+        Some(e) => Err(e)
+        None    => finish_clean(r)
+
+// `finish` for a reader that is not already carrying a failure.
+//
+// Split out so that the sticky failure is answered in one line above
+// and the end-of-stream reasoning — is a field open, is a record
+// unreleased, was a quote never closed — reads on its own.
+fn finish_clean(r: Reader) -> Result<[Row], CsvError>
+    // A quoted field the stream ended inside of can only be found
+    // here: until the stream ends, the next chunk might close it.
+    if r.state == S_QUOTED or r.state == S_ESCAPE
+        return Err(UnterminatedQuote(r.field_line, r.field_col))
+
+    var fields = r.pending
+    var have = list.len(r.pending) > 0
+    if r.state == S_UNQUOTED
+        fields = list.push(fields, close_field(r.dialect, r.partial))
+        have = true
+    else if r.state == S_QUOTE_SEEN
+        fields = list.push(fields, r.partial)
+        have = true
+    else if r.state == S_FIELD_START and have
+        // `a,` — the record's last field is empty and the file ended
+        // before its terminator.
+        fields = list.push(fields, "")
+
+    if not have
+        return Ok([])
+
+    let done = emit_record(r.dialect, fields, r.row_line, [], r.head,
+                           r.index, r.width)
+    if done.failed == F_RAGGED
+        Err(RaggedRow(done.failed_line, done.width, done.failed_col))
+    else
+        Ok(done.rows)
 
 // The sticky failure this reader is carrying, or `None`.
 //
@@ -204,7 +610,16 @@ pub fn finish(r: Reader) -> Result<[Row], CsvError>
 //         None    => println("fine")
 // ```
 pub fn error(r: Reader) -> ?CsvError
-    todo("csv-nv.error")
+    if r.failed == F_BAD_DIALECT
+        dialect.check(r.dialect)
+    else if r.failed == F_BARE_QUOTE
+        Some(BareQuote(r.failed_line, r.failed_col))
+    else if r.failed == F_RAGGED
+        Some(RaggedRow(r.failed_line, r.width, r.failed_col))
+    else if r.failed == F_FIELD_TOO_LONG
+        Some(FieldTooLong(r.failed_line, r.failed_col, r.dialect.max_field))
+    else
+        None
 
 // The header, once a `has_header` dialect has consumed one.
 //
@@ -225,7 +640,17 @@ pub fn error(r: Reader) -> ?CsvError
 //         None    => println("no header yet")
 // ```
 pub fn header_row(r: Reader) -> ?Header
-    todo("csv-nv.header_row")
+    if list.len(r.head) == 0
+        None
+    else
+        Some(Header { names: r.head })
+
+// How many bytes `read_all` asks its source for at a time.
+//
+// 64 KiB: large enough that the per-call cost of a file read is
+// amortised over a few hundred records, small enough that a reader
+// over a socket does not sit on a buffer it will not fill.
+const READ_CHUNK: Int = 65536
 
 // Read a whole stream, and be charged exactly what the stream costs.
 //
@@ -246,6 +671,19 @@ pub fn header_row(r: Reader) -> ?Header
 // `Transport` carries the stream's own `IoError` through, so a caller
 // can still tell a timeout from a truncated file.
 //
+// WHERE THIS LOOP STOPS.  `Read`'s contract is that an empty result is
+// end of stream and an `Err` is a transport failure, and this stops on
+// the first empty read.  It ALSO stops, without an error, on
+// `IoClosed`: a source that reports itself closed is a source with no
+// more bytes, which is end of stream by another name, and the standard
+// library's own `impl Read[] for Buffer` reports an exhausted buffer
+// exactly that way (`bugs/stdlib/buffer-read-reports-end-of-stream-as-
+// ioclosed.md` in the toolchain).  Every other `IoError` — a timeout,
+// a broken pipe, a permission — is `Transport`, and the records read
+// before it are discarded rather than returned as a whole file: a
+// caller who wants the prefix of a stream that failed drives `feed`
+// and keeps what it handed back.
+//
 // ```novo
 // use reader
 // use dialect
@@ -263,7 +701,31 @@ pub fn header_row(r: Reader) -> ?Header
 //         Err(e)   => println(e.message())
 // ```
 pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> Result<[Row], CsvError> [e]
-    todo("csv-nv.read_all")
+    var r = reader(d)
+    var rows: [Row] = []
+    var transport: ?IoError = None
+    var done = false
+    loop
+        if done
+            break
+        match src.read(READ_CHUNK)
+            Err(e)    =>
+                match e
+                    IoClosed =>
+                        done = true
+                    _        =>
+                        transport = Some(e)
+                        done = true
+            Ok(chunk) =>
+                if bytes.len(chunk) == 0
+                    done = true
+                else
+                    let (next, got) = feed(r, chunk)
+                    r = next
+                    rows = list.append(rows, got)
+    match transport
+        Some(e) => Err(Transport(e))
+        None    => Ok(list.append(rows, finish(r)!))
 
 // A whole CSV document already in memory, as records.
 //
@@ -281,4 +743,5 @@ pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> Result<[Row], CsvError> [e]
 //         Err(_)   => println("bad file")
 // ```
 pub fn parse(text: Str, d: Dialect) -> Result<[Row], CsvError>
-    todo("csv-nv.parse")
+    let (r, rows) = feed_str(reader(d), text)
+    Ok(list.append(rows, finish(r)!))
