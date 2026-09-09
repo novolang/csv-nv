@@ -1,11 +1,5 @@
 # csv-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
-
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`. Installing this package works;
-calling it panics with `not implemented`.
-
 ## What this is
 
 RFC 4180 comma-separated values, read and written by a package that
@@ -27,7 +21,7 @@ novo pkg build
 novo test
 ```
 
-## The one example that will work
+## The one example
 
 ```novo
 use reader
@@ -107,15 +101,26 @@ is one record type and its fields are bytes that were not checked.
 
 ## Status
 
-Every function is `todo()`. `novo test` runs the API suite, and every
-assertion in it reaches `not implemented: csv-nv.<fn>` — which is the
-expected result until the bodies land, and is what makes the suite a
-description of the interface rather than of nothing.
+Implemented, and `experimental`: the API tests were written against
+the signatures before any body existed, so the suite is a description
+of the interface that the bodies now have to agree with. `novo test`
+runs it — 33 assertions over four suites — and `tests/differential.nv`
+runs a thirty-document corpus through both engines so that `novo run
+--interp` and the compiled binary can be compared byte for byte.
 
 | module | functions | implemented |
 | --- | --- | --- |
-| `csverror` | 2 | no |
-| `dialect` | 11 | no |
-| `record` | 12 | no |
-| `reader` | 8 | no |
-| `writer` | 6 | no |
+| `csverror` | 2 | yes |
+| `dialect` | 11 | yes |
+| `record` | 12 | yes |
+| `reader` | 8 | yes |
+| `writer` | 6 | yes |
+
+### What it decides where RFC 4180 does not
+
+The RFC describes a well-formed file and says nothing about the files
+people have. `reader.nv`'s module comment is the full list; the short
+version is that a blank line is not a record, a file may end without a
+terminator, a lone CR ends a line, a bare quote in an unquoted field is
+data under a lenient dialect and `BareQuote` under a strict one, and an
+empty document is zero records rather than one empty one.

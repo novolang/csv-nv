@@ -1,15 +1,17 @@
 [package]
 name        = "csv-nv"
-version     = "0.0.1"
+version     = "0.1.0"
 description = "RFC 4180 comma-separated values, read and written without performing anything: a feed-and-drain reader the host pumps, a writer that returns bytes, a dialect value for the formats that are not quite the RFC, typed access to a record by index and by header name, and errors that name the line and the column."
 license     = "Apache-2.0"
 
-# An INTERFACE release: every `pub fn` body is a `todo()`, so the
-# signatures and the effect rows are published and nothing is
-# implemented.  `novo pkg publish` recognises the shape and requires
-# both the draft stability and the 0.0.x version; the first
-# implementation is the 0.1.0 published over it.
-stability   = "draft"
+# The first release with bodies, published over the 0.0.1 interface.
+# `novo pkg publish` refuses a `0.0.x` once a body is real — a
+# half-built package is a 0.1.x with a smaller surface, not a 0.0.x
+# with holes in it — so the promotion is the version and this line
+# together.  `experimental` because the API tests were written against
+# the signatures before the bodies existed and no consumer has yet
+# argued with either.
+stability   = "experimental"
 
 # `core`, and the one function that takes a stream stays inside that
 # budget by BINDING its cost rather than spending one:
