@@ -1,40 +1,40 @@
 // csverror.nv — every way a CSV file can refuse to be read, and where.
 //
-// WHY THE POSITION IS IN THE VARIANT AND NOT BESIDE IT
-//
-// A CSV file is a thing a person edited, and the answer they need is
-// "line 4,812, column 37", not "parse error".  A parser that returns a
-// reason and makes the caller carry the cursor gets a caller that does
-// not carry the cursor.  So every reason that HAS a position carries
-// it, and the two that do not — a column that is not in the header, a
-// dialect that contradicts itself — are honest about having none:
-// `line_of` answers `-1` for them rather than `0`, because line 0 does
-// not exist and a caller that prints it has been told nothing.
+// A position is part of the reason rather than a second value beside
+// it.  A CSV file is something a person edited, and the answer they
+// need is "line 4,812, column 37" rather than "parse error".  A parser
+// that answers a reason and leaves the caller to carry the cursor gets
+// a caller that does not carry the cursor.  Every reason that has a
+// position carries it.  The two that do not are a column that is not
+// in the header and a dialect that contradicts itself.  `line_of`
+// answers `-1` for those rather than `0`, because line 0 does not
+// exist and a caller that prints it has been told nothing.
 //
 // Lines are 1-based.  Columns are 1-based and mean one of two things,
-// depending on who raised the error, and the difference is worth
-// stating because it is the one place this package cannot give a
-// single answer:
+// depending on which half of the package raised the error.  That is
+// worth stating because it is the one place this package cannot give a
+// single answer.
 //
-//   - THE SCANNER's errors — `UnterminatedQuote`, `BareQuote`,
-//     `FieldTooLong` — carry a 1-based BYTE offset into the line, which
-//     is what an editor's status bar shows and what a `sed -n` can jump
-//     to.  Not character offsets: this package never decodes, and a
-//     byte offset it can always produce is worth more than a character
-//     offset it would have to guess at on invalid UTF-8.
-//   - THE TYPED READS — `NotAnInt`, `NotAFloat`, `NotABool` — carry the
-//     1-based FIELD number instead.  `record`'s reads are answered from
-//     a `Row`, and a `Row` is the fields and the line it started on; it
-//     does not carry the line's text, so there is no byte offset to
-//     report and inventing one would be worse than naming the column a
-//     person counts commas to find.
+//   - The scanner's errors, `UnterminatedQuote`, `BareQuote` and
+//     `FieldTooLong`, carry a 1-based byte offset into the line.  That
+//     is what an editor's status bar shows and what a `sed -n` can
+//     jump to.  It is not a character offset.  This package never
+//     decodes, and a byte offset it can always produce is worth more
+//     than a character offset it would have to guess at on invalid
+//     UTF-8.
+//   - The typed reads, `NotAnInt`, `NotAFloat` and `NotABool`, carry
+//     the 1-based field number instead.  `record`'s reads are answered
+//     from a `Row`, and a `Row` is the fields and the line it started
+//     on.  It does not carry the line's text, so there is no byte
+//     offset to report, and inventing one would be worse than naming
+//     the column a person counts commas to find.
 //
-// THE TRANSPORT VARIANT IS THE LAYER SEAM.  `reader.read_all` takes a
-// stream from its host and the stream can fail; the failure is the
-// host's `IoError`, carried through rather than flattened to a string,
-// so a caller that wants to retry on `IoInterrupted` still can.  It
-// costs this package nothing: `IoError` is a type, and naming a type
-// spends no effects.
+// `Transport` is where the host's own failure comes through.
+// `reader.read_all` takes a stream from its host and the stream can
+// fail.  The failure is the host's `IoError`, carried through rather
+// than flattened to a string, so a caller that wants to retry on
+// `IoInterrupted` still can.  It costs this package nothing.  `IoError`
+// is a type, and naming a type spends no effects.
 
 // Why a CSV input, or a request about a parsed row, could not be
 // answered.
@@ -52,7 +52,7 @@ pub enum CsvError
     // record rather than recoverable — the position is where the
     // opening quote was, which is the byte a person has to go fix.
     UnterminatedQuote(line: Int, col: Int)
-    // A `"` inside an UNQUOTED field.  RFC 4180 § 2.5 forbids it and
+    // A `"` inside an unquoted field.  RFC 4180 § 2.5 forbids it and
     // says nothing about what to do, so the dialect decides: `strict`
     // reports this, and the lenient reading keeps the quote as data.
     BareQuote(line: Int, col: Int)
@@ -96,9 +96,8 @@ pub enum CsvError
 // decide something matches the variant instead; a caller who wants to
 // tell somebody what happened prints this.
 //
-// `Result<T, CsvError>` requires it — SPEC § 3.4 makes `Error` the
-// bound on a result's error type — so this impl exists whether or not
-// an interface release has anything to say yet.
+// `Result<T, CsvError>` requires it.  SPEC § 3.4 makes `Error` the
+// bound on a result's error type.
 impl Error for CsvError
     fn message(self) -> Str
         match self

@@ -1,18 +1,16 @@
-// reader_tests.nv — the API suite for the feed-and-drain reader.
+// reader_tests.nv — the tests of the feed-and-drain reader.
 //
-// RED ON PURPOSE: every body is a `todo()`.  Run it with
-// `novo test tests/reader_tests.nv --isolate` to get one verdict per
-// `@test` naming the function each stopped at.
+// Run it with `novo test tests/reader_tests.nv --isolate` to get one
+// verdict per `@test` naming the function each stopped at.
 //
-// THE ONE THING THIS SUITE PROVES TODAY, before any body exists:
+// One case is asserted by the compiler rather than at run time.
 // `test_read_all_over_a_buffer_costs_nothing` calls
 // `reader.read_all(Buffer.from_str(…), …)` from a function whose only
-// effect row is `[io]` — the `println` — and it COMPILES.  The
+// effect row is `[io]`, for the `println`, and the file compiles.  The
 // standard library declares `impl Read[] for Buffer`, so `[e]` in
 // `read_all`'s clause substitutes to nothing at that call site.  A
-// signature that had spent `[io]` instead of binding it would fail
-// here, at the compiler, which is the whole reason to publish an
-// interface before a body.
+// signature that had spent `[io]` instead of binding it would not
+// compile here.
 
 use std.test
 use reader
@@ -169,12 +167,11 @@ fn test_parse_is_the_whole_document_in_one_call() [io]
 
 @test
 fn test_read_all_over_a_buffer_costs_nothing() [io]
-    // The claim: `read_all<S: Read[e]>` binds the trait's effect
-    // parameter, `impl Read[] for Buffer` supplies nothing, and this
-    // function's row is `[io]` for the `println` alone.  If the
-    // signature had spent an effect instead of binding one, this file
-    // would not compile — which is the assertion, and the compiler
-    // makes it before any body exists.
+    // `read_all<S: Read[e]>` binds the trait's effect parameter,
+    // `impl Read[] for Buffer` supplies nothing, and this function's
+    // effect row is `[io]` for the `println` alone.  A signature that
+    // had spent an effect instead of binding one would not compile
+    // here, so the compiler is what makes this assertion.
     test.case("read_all over an in-memory Buffer")
     let src = Buffer.from_str("name,age\nalice,30\n")
     match reader.read_all(src, dialect.rfc4180())

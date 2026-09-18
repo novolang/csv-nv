@@ -1,33 +1,30 @@
 // dialect.nv — the eight decisions that separate one comma-separated
 // file from another, in one value.
 //
-// RFC 4180 describes ONE file format and the world ships a dozen.  The
-// difference between them is small and boring — a semicolon instead of
-// a comma, a backslash instead of a doubled quote, a `#` line the
-// producer thinks is a comment — and every reader that hard-codes the
-// first reading grows flags until it has this struct anyway, spread
-// over its call sites.  So it is a value from the start, built once
-// where a person can read it and passed to the reader and the writer
-// both.
+// RFC 4180 describes one file format and the world ships a dozen.  The
+// difference between them is small.  A semicolon instead of a comma, a
+// backslash instead of a doubled quote, a `#` line the producer thinks
+// is a comment.  A reader that hard-codes the first reading grows flags
+// until it has this struct anyway, spread over its call sites.  It is a
+// value from the start, built once where a person can read it and
+// passed to the reader and the writer both.
 //
-// WHY THE BYTES ARE `Int` AND NOT `Str`
+// A byte in a dialect is an `Int` and not a `Str`.  A delimiter is one
+// byte.  Spelling it `","` invites `", "`, which is not a delimiter,
+// and forces every comparison in the scanner through a string equality.
+// As an `Int` it is the byte the scanner is already looking at, the
+// constructors below spell the common ones by name, and a caller with
+// an exotic separator writes `0x1F` and means it.  `-1` is the value
+// that says there is no such byte, which is how a dialect turns a
+// feature off.
 //
-// A delimiter is one byte.  Spelling it `","` invites `", "`, which is
-// not a delimiter, and forces every comparison in the scanner through
-// a string equality.  As an `Int` it is the byte the scanner is
-// already looking at, the constructors below spell the common ones by
-// name, and a caller with an exotic separator writes `0x1F` and means
-// it.  `-1` is the sentinel for "there is no such byte", which is how
-// a dialect turns a feature off.
-//
-// WHY VALIDATION IS A SEPARATE CALL
-//
-// `with_delim` cannot refuse: it returns a `Dialect`, and a builder
-// that returned `?Dialect` would make every chained call an unwrap.
-// So the builders are total, `check` is the one place that answers
-// whether the combination makes sense, and the reader calls it once
-// before it reads a byte — which means a contradictory dialect is
-// reported at the file, with a reason, rather than parsed around.
+// Validation is a separate call.  `with_delim` cannot refuse, because
+// it returns a `Dialect`, and a builder that returned `?Dialect` would
+// make every chained call an unwrap.  The builders are total, `check`
+// is the one place that answers whether the combination makes sense,
+// and the reader calls it once before it reads a byte.  A contradictory
+// dialect is therefore reported at the file, with a reason, rather than
+// parsed around.
 
 // The largest byte value, and the sentinel one below the smallest.
 // Spelled once so that `check`'s four range tests read as one rule.
@@ -59,10 +56,10 @@ pub struct Dialect
     // The byte that opens and closes a quoted field.  `0x22` (`"`).
     quote: Int
     // The byte that escapes a quote inside a quoted field, or `-1` for
-    // RFC 4180's doubling (`""`).  A file that uses `\"` — which is
-    // most files a shell script produced — sets this to `0x5C`.
+    // RFC 4180's doubling (`""`).  A file that uses `\"`, which is
+    // most of the files a shell script produced, sets this to `0x5C`.
     escape: Int
-    // A byte that, as the FIRST byte of a line outside a quoted field,
+    // A byte that, as the first byte of a line outside a quoted field,
     // makes the whole line a comment.  `-1` for none, which is RFC
     // 4180: the standard has no comments and neither does the default.
     comment: Int
@@ -71,8 +68,8 @@ pub struct Dialect
     // and the writer's `write_header` is what puts it back.
     has_header: Bool
     // Whether to drop leading and trailing spaces and tabs from an
-    // UNQUOTED field.  False by default, because RFC 4180 § 2.4 says
-    // the space is part of the field and a reader that silently
+    // unquoted field.  False by default, because RFC 4180 § 2.4 says
+    // the space is part of the field, and a reader that silently
     // disagrees loses data nobody asked it to lose.
     trim: Bool
     // Whether to refuse what RFC 4180 forbids instead of reading it
@@ -90,10 +87,11 @@ pub struct Dialect
 // comments, no trimming, a header row, lenient, fields bounded at
 // 1 MiB.
 //
-// The two places this is not literally the RFC are the header — the
-// RFC makes it optional and every consumer of this package has one —
-// and the field bound, which the RFC does not mention because it does
-// not consider a hostile input.  Both are `with_*` calls away.
+// The two places this is not literally the RFC are the header and the
+// field bound.  The RFC makes the header optional, and every consumer
+// of this package has one.  The RFC does not mention a field bound,
+// because it does not consider a hostile input.  Both are `with_*`
+// calls away.
 //
 // ```novo
 // use dialect
@@ -111,8 +109,8 @@ pub fn rfc4180() -> Dialect
 // nothing else changes, which is what `csv.excel_tab` means in
 // Python's `csv` and what `--delimiter=$'\t'` means to `csvkit`.
 //
-// Note it is NOT the IANA `text/tab-separated-values` format, which
-// forbids quoting entirely and escapes tabs as `\t`.  A file in that
+// It is not the IANA `text/tab-separated-values` format, which forbids
+// quoting entirely and escapes tabs as `\t`.  A file in that
 // format reads correctly here as long as no field contains a quote.
 //
 // ```novo
@@ -257,9 +255,9 @@ fn is_byte_or_off(b: Int) -> Bool
 // of the four outside `-1 ..= 255`; a delimiter or a quote of `-1`,
 // which no file can be read without; a negative `max_field`.
 //
-// `reader.reader` and `writer.writer` both call this, so a caller who
-// does not is not skipping the check — they are only choosing to find
-// out later.
+// `reader.reader` and `writer.writer` both call this.  A caller who
+// does not call it is not skipping the check.  They are choosing to
+// find out later.
 //
 // ```novo
 // use dialect

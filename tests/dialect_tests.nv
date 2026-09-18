@@ -1,11 +1,9 @@
-// dialect_tests.nv — the API suite for the dialect value.
+// dialect_tests.nv — the tests of the dialect value.
 //
-// RED ON PURPOSE.  Every body in this package is a `todo()`, so every
-// assertion below reaches `not implemented: csv-nv.<fn>` and the suite
-// fails.  That is the expected state of an interface package and it is
-// what makes these tests worth writing NOW: they compile against the
-// signatures, which is the claim being reviewed, and the day a body
-// lands the suite says whether the body agrees with what was promised.
+// They are written against the signatures, so each one says whether
+// the code agrees with what the doc comment promises.  The cases are
+// the RFC's own bytes, the one field each builder changes, and every
+// combination `dialect.check` refuses.
 
 use std.test
 use dialect

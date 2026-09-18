@@ -7,17 +7,6 @@ for it. This package reads and writes the format in novo-lang, with no
 dependencies. Nothing here opens a file: the caller holds the bytes and
 this package holds the grammar.
 
-| Decision | This package's answer |
-| --- | --- |
-| Record terminator written | CRLF, always |
-| Record terminators read | CRLF, LF and a lone CR |
-| Default field separator | `,` (`0x2C`) |
-| Default quote byte | `"` (`0x22`) |
-| Default quote escape | a doubled quote, RFC 4180 section 2.7 |
-| Default field size bound | 1 048 576 bytes |
-| Line numbers in an error | 1-based |
-| Column numbers in an error | 1-based |
-
 ## What it is
 
 A CSV **record** is one line of the file. Its **fields** are the pieces
@@ -57,6 +46,19 @@ completed together with the reader to feed next. A chunk may split
 anything: a field, a quoted field containing a newline, a CRLF between
 its two bytes. Whatever a chunk could not finish is carried in the
 reader and completed by the next one.
+
+Where RFC 4180 leaves a choice, this package makes these ones.
+
+| Decision | This package's answer |
+| --- | --- |
+| Record terminator written | CRLF, always |
+| Record terminators read | CRLF, LF and a lone CR |
+| Default field separator | `,` (`0x2C`) |
+| Default quote byte | `"` (`0x22`) |
+| Default quote escape | a doubled quote, RFC 4180 section 2.7 |
+| Default field size bound | 1 048 576 bytes |
+| Line numbers in an error | 1-based |
+| Column numbers in an error | 1-based |
 
 ## Install
 
@@ -164,8 +166,8 @@ the file needs it.
    Leniently, the widths vary and `record.width` is how a caller checks.
 7. **A field is never decoded.** The bytes come out of the file with the
    quoting removed and are handed back as a `Str` without being checked
-   as UTF-8. A reader that refused a Latin-1 export would be a reader
-   nobody could use on the files they have.
+   as UTF-8. A file in any byte encoding therefore reads, and a caller
+   who needs UTF-8 validation does it on the fields it cares about.
 8. **Types are asked for, one column at a time.** Nothing is inferred.
    `record.int_at`, `float_at` and `bool_at` take an index; `int_of`,
    `float_of` and `bool_of` take a header and a column name.
@@ -232,6 +234,9 @@ the file needs it.
 - **Trimming beyond one boolean.** `trim` drops spaces and tabs from an
   unquoted field. RFC 4180 section 2.4 says the space is part of the
   field, so the default is to keep it.
+- **A second index for a repeated column name.** `record.column`
+  answers the first index a name appears at. A caller who needs a later
+  one reads `record.names` and searches it.
 - **Serialization of novo-lang structs.**
   [serde-nv](https://novo-lang.org/packages/serde-nv) is where that
   belongs.
@@ -283,25 +288,6 @@ novo run --interp tests/differential.nv > a.txt
 novo run          tests/differential.nv > b.txt
 cmp a.txt b.txt
 ```
-
-## Implementation status
-
-Everything listed here is implemented and passing.
-
-| Item | Implemented |
-| --- | --- |
-| `dialect.rfc4180`, `.tsv`, `.check` | yes |
-| `dialect.with_delim`, `.with_quote`, `.with_escape`, `.with_comment` | yes |
-| `dialect.with_header`, `.with_trim`, `.with_strict`, `.with_max_field` | yes |
-| `reader.reader`, `.feed`, `.feed_str`, `.finish` | yes |
-| `reader.parse`, `.read_all` | yes |
-| `reader.error`, `.header_row` | yes |
-| `record.width`, `.field`, `.field_of` | yes |
-| `record.int_at`, `.int_of`, `.float_at`, `.float_of`, `.bool_at`, `.bool_of` | yes |
-| `record.header`, `.column`, `.names` | yes |
-| `writer.writer`, `.write_header`, `.write_row`, `.write_rows` | yes |
-| `writer.needs_quote`, `.quote_field` | yes |
-| `csverror.line_of`, `.col_of`, `CsvError.message` | yes |
 
 ## Licence
 

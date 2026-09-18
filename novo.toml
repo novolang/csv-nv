@@ -1,20 +1,16 @@
 [package]
 name        = "csv-nv"
-version     = "0.1.2"
+version     = "0.1.3"
 description = "RFC 4180 comma-separated values, read and written without performing anything: a feed-and-drain reader the host pumps, a writer that returns bytes, a dialect value for the formats that are not quite the RFC, typed access to a record by index and by header name, and errors that name the line and the column."
 license     = "Apache-2.0"
 
-# The first release with bodies, published over the 0.0.1 interface.
-# `novo pkg publish` refuses a `0.0.x` once a body is real — a
-# half-built package is a 0.1.x with a smaller surface, not a 0.0.x
-# with holes in it — so the promotion is the version and this line
-# together.  `experimental` because the API tests were written against
-# the signatures before the bodies existed and no consumer has yet
-# argued with either.
+# `experimental` because the tests were written against the signatures
+# rather than by a consumer, and no program outside this repository has
+# used the package yet.
 stability   = "experimental"
 
 # `core`, and the one function that takes a stream stays inside that
-# budget by BINDING its cost rather than spending one:
+# layer by binding its cost rather than spending one.
 # `read_all<S: Read[e]>(…) -> … [e]` is charged whatever the caller's
 # impl supplies (SPEC § 5.6).  Nothing else in the package reaches for
 # anything at all.

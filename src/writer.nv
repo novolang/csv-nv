@@ -1,46 +1,42 @@
 // writer.nv — records to bytes, and the bytes go wherever the caller
 // puts them.
 //
-// A LIBRARY DOES NOT PRINT, and in a `core` package it also cannot:
-// the budget is no effects at all, so there is no version of this
-// module that takes a file.  `write_row` returns the bytes of one
-// record and the caller writes them — to a file, to a socket, into a
+// A library does not print, and in a `core` package it also cannot.
+// The package declares no effects at all, so there is no version of
+// this module that takes a file.  `write_row` answers the bytes of one
+// record and the caller writes them, to a file, to a socket, into a
 // buffer, into a checksum.  That is the same constraint the reader has
 // and it produces the same shape from the other side.
 //
-// WHY IT IS A `Writer` AND NOT A FREE FUNCTION
+// The state is a `Writer` and not a free function's arguments.  Two
+// things have to be remembered between records and neither is in the
+// record: the dialect, and whether anything has been written yet.  The
+// second is what decides a header, because a writer that has emitted
+// nothing may still write one, and it is what a caller would otherwise
+// track with a boolean beside every call.  Like the reader it is
+// threaded rather than mutated, because `[mutate]` is a host effect.
 //
-// Two things have to be remembered between records and neither is in
-// the record: the dialect, and whether anything has been written yet.
-// The second is what decides a header — a writer that has emitted
-// nothing may still write one — and what a caller would otherwise
-// track with a boolean beside every call.  So the state is a value,
-// and like the reader it is threaded rather than mutated, because
-// `[mutate]` is a host effect.
+// The promise is a round trip.  `reader.parse` over this writer's
+// output, under the same dialect, gives back the records that went in.
+// That is the one promise worth making about a CSV writer and it is
+// what this package's tests are built around.  Quoting is applied
+// where the dialect requires it and nowhere else, and a field holding
+// the delimiter, the quote byte, a CR or an LF is always quoted.
 //
-// WHAT IT GUARANTEES
-//
-// `reader.parse(writer output, same dialect)` gives back the records
-// that went in.  That round trip is the only promise worth making
-// about a CSV writer and it is the one this package's tests are built
-// around: quoting is applied where the dialect requires it and nowhere
-// else, and a field holding the delimiter, the quote byte, a CR or an
-// LF is always quoted.
-//
-// A WRITER THAT CANNOT WRITE EMITS NOTHING.  Three refusals, all of
-// them the empty byte string and an unchanged writer, because there is
-// no error channel on a `(Writer, Bytes)`: a dialect `dialect.check`
-// refuses, a header after the first record, and — under a `strict`
-// dialect — a record of a different width from the first.  The writer
-// is a value the caller threads, so a refusal is visible as a `rows`
-// that did not move.
+// A writer that cannot write emits nothing.  There are three refusals,
+// all of them the empty byte string and an unchanged writer, because
+// there is no error channel on a `(Writer, Bytes)`.  They are a
+// dialect `dialect.check` refuses, a header after the first record,
+// and, under a `strict` dialect, a record of a different width from
+// the first.  The writer is a value the caller threads, so a refusal
+// is visible as a `rows` that did not move.
 
 use dialect
 
 // The two bytes RFC 4180 § 2.1 terminates a record with, and the
-// string they spell.  Not a dialect field: a writer whose line ending
-// varied is a writer whose output nobody can predict from the dialect
-// they were handed.
+// string they spell.  They are not a dialect field.  A writer whose
+// line ending varied is a writer whose output nobody can predict from
+// the dialect they were handed.
 const BYTE_CR: Int = 13
 const BYTE_LF: Int = 10
 const TERMINATOR: Str = "\r\n"
@@ -89,8 +85,8 @@ pub fn writer(d: Dialect) -> Writer
 // True when this dialect is one a file can be written in.
 //
 // The same `dialect.check` the reader calls, read as a boolean because
-// a writer has nowhere to put the reason: it answers `(Writer, Bytes)`
-// and the refusal is the empty `Bytes`.
+// a writer has nowhere to put the reason.  It answers `(Writer,
+// Bytes)` and the refusal is the empty `Bytes`.
 fn usable(d: Dialect) -> Bool
     match dialect.check(d)
         Some(_) => false
@@ -98,7 +94,7 @@ fn usable(d: Dialect) -> Bool
 
 // The header record, as bytes.
 //
-// Legal only as the first thing a writer emits; afterwards it returns
+// Legal only as the first thing a writer emits.  Afterwards it answers
 // empty bytes and leaves the writer alone, because a header in the
 // middle of a file is not a thing this package will produce.  It is a
 // separate call from `write_row` so that a caller round-tripping a
@@ -123,15 +119,14 @@ pub fn write_header(w: Writer, head: Header) -> (Writer, Bytes)
 // One record, as bytes, terminated.
 //
 // The terminator is CRLF, which is what RFC 4180 § 2.1 says and what
-// every spreadsheet writes.  A caller who wants LF writes the rows
-// into their own buffer and does not get to ask this package for it —
-// a writer with a line-ending flag is a writer whose output nobody can
-// predict from the dialect they were handed.
+// every spreadsheet writes.  A caller who wants LF writes the records
+// into their own buffer.  A writer with a line-ending flag is a writer
+// whose output nobody can predict from the dialect they were handed.
 //
 // A field is quoted when it contains the delimiter, the quote, a
-// carriage return or a line feed, and not otherwise: `needs_quote` is
-// that rule, exposed, because a caller building a header by hand wants
-// the same answer.
+// carriage return or a line feed, and not otherwise.  `needs_quote` is
+// that rule on its own, because a caller building a header by hand
+// wants the same answer.
 //
 // ```novo
 // use writer
@@ -183,7 +178,7 @@ pub fn write_rows(w: Writer, rows: [[Str]]) -> (Writer, Bytes)
 // Whether this field has to be quoted under this dialect.
 //
 // True when the field contains the delimiter, the quote byte, a
-// carriage return or a line feed.  Not for a leading space: RFC 4180
+// carriage return or a line feed.  Not for a leading space.  RFC 4180
 // § 2.4 makes the space part of the field, so a reader that does not
 // trim reads it back correctly unquoted, and a reader that does trim
 // was asked to.
@@ -208,11 +203,11 @@ pub fn needs_quote(d: Dialect, field: Str) -> Bool
 // with the inner quotes escaped the way the dialect says.
 //
 // Doubling by default (RFC 4180 § 2.7), or the dialect's `escape` byte
-// when it has one — and a dialect with an escape byte escapes that
-// byte too, so that a field holding a backslash comes back holding a
-// backslash.  Exposed because a caller writing a file this package
-// does not otherwise produce — a header comment, a footer — still
-// needs one field spelled correctly.
+// when it has one.  A dialect with an escape byte escapes that byte
+// too, so that a field holding a backslash comes back holding a
+// backslash.  It is public because a caller writing a line this
+// package does not otherwise produce, such as a header comment or a
+// footer, still needs one field spelled correctly.
 //
 // ```novo
 // use writer

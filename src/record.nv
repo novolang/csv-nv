@@ -1,37 +1,33 @@
 // record.nv — a parsed record, and the two ways to ask it for a field.
 //
-// WHY A ROW IS A LIST OF STRINGS AND NOT A MAP
+// A `Row` is a list of strings and not a map.  A CSV file has no types
+// and its header is optional, so the only thing a parser can honestly
+// hand back is the fields in order.  A map from header name to value
+// looks friendlier and is a worse fit.  It loses the order the file
+// had, it cannot represent a duplicate header, which real files have,
+// and it costs one allocation per field per record on a file whose
+// whole point is that there are millions of them.  A `Row` is the
+// fields, and the header is a separate value the caller holds once.
+// `Header` is that value, and it turns a name into an index.
 //
-// A CSV file has no types and its header is optional, so the only
-// thing a parser can honestly hand back is the fields in order.  A map
-// from header name to value looks friendlier and is a worse fit: it
-// loses the order the file had, it cannot represent a duplicate header
-// (which real files have), and it costs one allocation per field per
-// record on a file whose whole point is that there are millions of
-// them.  So a `Row` is the fields, and the header is a SEPARATE value
-// the caller holds once — `Header` — that turns a name into an index.
-//
-// That split is what makes the by-name calls below cheap: `int_of` is
+// That split is what makes the by-name calls below cheap.  `int_of` is
 // `column` then `int_at`, and `column` searches a list that is as long
 // as the file is wide, once per lookup, rather than hashing every
 // field of every record on the chance somebody asks.
 //
-// WHY EVERY TYPED READ RETURNS A `Result` AND NOT AN OPTION
+// Every typed read answers a `Result` and not an option.  "This column
+// is not a number" and "there is no such column" are different
+// problems with different fixes.  A caller typing a column, which is
+// what a statistics tool does with every column before it can decide
+// anything, needs to tell them apart on the first record rather than
+// after the run, and `?Int` collapses them.  `field` stays an option
+// because there is only one way to fail: the index is off the end.
 //
-// "this column is not a number" and "there is no such column" are
-// different problems with different fixes, and a caller typing a
-// column — which is what a statistics tool does with every column
-// before it can decide anything — needs to tell them apart on the
-// first record rather than after the run.  `?Int` collapses them.
-// `field` stays an option because there is only one way to fail: the
-// index is off the end.
-//
-// WHAT THE `col` OF A TYPED FAILURE IS
-//
-// The 1-based FIELD number, not a byte offset into the line: a `Row`
-// carries its fields and the line it started on, and not the line's
-// text, so there is no byte to point at.  `csverror`'s module comment
-// is where that split is written down.
+// The `col` of a typed failure is the 1-based field number, not a byte
+// offset into the line.  A `Row` carries its fields and the line it
+// started on, and not the line's text, so there is no byte to point
+// at.  `csverror`'s module comment is where that split is written
+// down.
 
 // The bytes this module names, spelled once so that the scans below
 // read as rules rather than as arithmetic.
@@ -55,23 +51,23 @@ pub struct Row
     // write at all is not here, which is what makes `width` worth
     // asking about.
     fields: [Str]
-    // The 1-based line the record STARTED on.  Not the line it ended
-    // on: a quoted field may span lines, and the place a person goes
-    // to look is where the record began.
+    // The 1-based line the record started on, and not the line it
+    // ended on.  A quoted field may span lines, and the place a person
+    // goes to look is where the record began.
     line: Int
-    // The 0-based record number, header excluded.  So under a dialect
-    // with `has_header`, the first data record is `0` and sits on line
-    // 2 — the pair says both things, and neither can be derived from
+    // The 0-based record number, header excluded.  Under a dialect
+    // with `has_header` the first data record is `0` and sits on line
+    // 2.  The pair says both things, and neither can be derived from
     // the other once a quoted field has spanned a line.
     index: Int
 
 // The header record, as a name-to-index question.
 //
-// Duplicate names are kept: the file had them, and dropping one would
-// silently discard a column.  `column` answers with the FIRST index a
-// name appears at, which is what every other CSV library does and what
-// a caller writing `column("id")` on a file with two `id` columns
-// almost certainly meant.
+// Duplicate names are kept.  The file had them, and dropping one
+// would silently discard a column.  `column` answers with the first
+// index a name appears at, which is what every other CSV library does
+// and what a caller writing `column("id")` on a file with two `id`
+// columns almost certainly meant.
 //
 // ```novo
 // use record
@@ -171,12 +167,12 @@ fn column_or_missing(head: Header, name: Str) -> Result<Int, CsvError>
 // The field at an index, read as a decimal integer.
 //
 // Accepts an optional leading `+` or `-` and then digits, with
-// surrounding spaces ignored whatever the dialect's `trim` says — a
+// surrounding spaces ignored whatever the dialect's `trim` says.  A
 // number with a space around it is a number, and the alternative is a
-// caller who has to trim before every typed read.  Nothing else:
-// no thousands separators, no underscores, no hexadecimal.  A file
-// that writes `1,234` has written two fields and this package will not
-// guess otherwise.
+// caller who has to trim before every typed read.  Nothing else is
+// accepted: no thousands separators, no underscores, no hexadecimal.
+// A file that writes `1,234` has written two fields and this package
+// will not guess otherwise.
 //
 // `NotAnInt` carries the text, so the caller's message can quote it.
 //
@@ -272,10 +268,10 @@ pub fn float_of(row: Row, head: Header, name: Str) -> Result<Float, CsvError>
 // `yes`, `no`, `y`, `n`, `1`, `0`.  It is written out here because a
 // boolean column is the one place CSV libraries quietly differ, and a
 // caller who knows the set can decide whether their file is in it
-// before running over a million records.  An empty field is NOT false
-// — it is `NotABool`, because a spreadsheet's empty cell means "nobody
-// said" and turning that into `false` is a decision this package is
-// not entitled to make.
+// before running over a million records.  An empty field is not
+// false.  It is `NotABool`, because a spreadsheet's empty cell means
+// that nobody said, and turning that into `false` is a decision this
+// package is not entitled to make.
 //
 // Surrounding spaces are ignored, as they are for `int_at`.
 //
@@ -315,10 +311,10 @@ pub fn bool_of(row: Row, head: Header, name: Str) -> Result<Bool, CsvError>
 
 // This record read as a header.
 //
-// For the caller who parsed with `has_header` off — because they had
-// to look at the first record to decide whether it WAS a header — and
-// then decided it was.  `reader.header_row` is the other route, for
-// the caller who knew in advance.
+// For the caller who parsed with `has_header` off, because they had to
+// look at the first record to decide whether it was a header, and then
+// decided it was.  `reader.header_row` is the other route, for the
+// caller who knew in advance.
 //
 // ```novo
 // use record
@@ -333,10 +329,10 @@ pub fn header(row: Row) -> Header
 // The 0-based index of a column name, or `None`.
 //
 // The first index, when the header repeats a name.  A caller who needs
-// the second one reads `names` and searches it themselves — this
-// package will not grow a `column_all`, because a file with duplicate
-// headers is a file whose reader has to decide something, and a second
-// call would let them not decide it.
+// the second one reads `names` and searches it themselves.  There is no
+// `column_all`, because a file with duplicate headers is a file whose
+// reader has to decide something, and a second call would let them not
+// decide it.
 //
 // ```novo
 // use record

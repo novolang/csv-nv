@@ -1,14 +1,11 @@
-// record_tests.nv — the API suite for a parsed record.
+// record_tests.nv — the tests of a parsed record.
 //
-// RED ON PURPOSE, like every suite in this package: the bodies are
-// `todo()`, so each assertion reaches `not implemented: csv-nv.<fn>`.
 // `novo test tests/record_tests.nv --isolate` gives every `@test` its
-// own process and prints which function each one stopped at, which is
-// the readable form of an interface package's verdict.
+// own process and prints which function each one stopped at.
 //
-// What is asserted here is the CONTRACT, not the state: the fixtures
-// below are the rows the reader will produce, written by hand so that
-// the typed reads can be pinned down without a parser existing yet.
+// The fixtures below are records written by hand rather than read from
+// a document, so that each typed read is pinned down on its own and a
+// failure names the read and not the scanner.
 
 use std.test
 use record

@@ -1,12 +1,9 @@
-// reader.nv — the load-bearing interface: a CSV reader that performs
-// nothing.
+// reader.nv — a CSV reader that performs nothing.
 //
-// THE SHAPE, AND WHY IT IS THIS ONE
-//
-// `csv-nv` is a `core` package, so its budget is no effects at all and
-// it may not read a file, a socket or standard input.  A CSV file is
+// `csv-nv` is a `core` package, so it declares no effects at all and it
+// may not read a file, a socket or standard input.  A CSV file is
 // exactly the thing a caller wants to stream.  Those two facts are
-// reconciled by a FEED-AND-DRAIN STATE MACHINE: the host holds the
+// reconciled by a feed-and-drain state machine.  The host holds the
 // stream, hands this package whatever bytes it has, and gets back the
 // records those bytes completed plus a reader to hand the next chunk
 // to.  Nothing here reads and nothing here waits.
@@ -15,55 +12,49 @@
 //     let (r2, rows) = reader.feed(r, chunk)     // as many times as you like
 //     let rest = reader.finish(r2)!              // once, at end of stream
 //
-// A chunk may split anything — a field, a quoted field containing a
-// newline, a CRLF between the CR and the LF — and the reader carries
+// A chunk may split anything.  A field, a quoted field containing a
+// newline, a CRLF between the CR and the LF.  The reader carries
 // whatever it could not finish into the next call.  That is the whole
-// contract, and it is why `feed` returns a NEW reader rather than
+// contract, and it is why `feed` returns a new reader rather than
 // mutating one: `[mutate]` is a host effect and this package has none.
 //
-// `read_all` IS THE SAME MACHINE WITH THE LOOP INSIDE IT
+// `read_all` is the same machine with the loop inside it.
 //
 //     pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> … [e]
 //
 // The bound binds `Read`'s effect parameter and the clause uses it
 // (SPEC § 5.6), so this one function costs whatever the caller's
-// stream costs — `[io]` for a file, `[io, net]` for a socket, nothing
-// for an in-memory buffer — and the package stays `core`, because the
+// stream costs.  A file charges `[io]`, a socket `[io, net]`, an
+// in-memory buffer nothing, and the package stays `core`, because the
 // impl that supplies the effect is declared where the host is.  It is
-// the direct shape, and it is here so that the ninety per cent of
-// callers who just have a file do not have to write the pump.
+// here so that the callers who have a file do not write the pump.
 //
-// WHERE RFC 4180 IS SILENT, THIS IS WHAT IT DOES
+// RFC 4180 describes a well-formed file and says nothing about the
+// files people have.  Five decisions fill that gap, each of them the
+// reading every other library takes, written here so that nobody has
+// to read the scanner to find out.
 //
-// The RFC describes a well-formed file and says nothing about the
-// files people have.  Five decisions, all of them the reading every
-// other library takes, all of them written here so that nobody has to
-// read the scanner to find out:
-//
-//   - A BLANK LINE IS NOT A RECORD.  A line whose terminator arrives
+//   - A blank line is not a record.  A line whose terminator arrives
 //     with no field open and none finished is skipped, which is also
 //     what makes the newline at the end of a well-formed file produce
-//     nothing.  A line holding one empty QUOTED field (`""`) is a
-//     record of one empty field: the quotes are what say so.
-//   - A FILE MAY END WITHOUT A TERMINATOR (§ 2.2 makes it optional).
+//     nothing.  A line holding one empty quoted field (`""`) is a
+//     record of one empty field, because the quotes say so.
+//   - A file may end without a terminator, which § 2.2 makes optional.
 //     `finish` is where that last record comes out.
-//   - A LONE CR ENDS A LINE.  The RFC's terminator is CRLF; a file
+//   - A lone CR ends a line.  The RFC's terminator is CRLF, and a file
 //     that lost its LFs is still a file, so a CR ends the record and a
 //     following LF is its second half rather than a blank line.
-//   - A BARE QUOTE IN AN UNQUOTED FIELD (§ 2.5 forbids it) is data
-//     under a lenient dialect and `BareQuote` under a strict one.  So
-//     is text after a closing quote, which is the same defect seen
-//     from the other side.
-//   - AN EMPTY DOCUMENT is zero records, not one empty one.
+//   - A bare quote in an unquoted field, which § 2.5 forbids, is data
+//     under a lenient dialect and `BareQuote` under a strict one.  Text
+//     after a closing quote is the same defect seen from the other
+//     side, and it is reported the same way.
+//   - An empty document is zero records, not one empty record.
 //
-// WHAT THIS PACKAGE IS NOT
-//
-// It does not decode.  A field is bytes that came out of the file with
-// the quoting removed, handed back as a `Str` without being validated
-// as UTF-8, because a CSV reader that refused a Latin-1 export would
-// be a CSV reader nobody could use on the files they actually have.
-// It does not infer types either: `record`'s typed reads are asked
-// for, one column at a time, by a caller who decided.
+// This package does not decode.  A field is bytes that came out of the
+// file with the quoting removed, handed back as a `Str` without being
+// validated as UTF-8, so a file in any byte encoding reads.  It does
+// not infer types either.  `record`'s typed reads are asked for, one
+// column at a time, by a caller who decided.
 
 use dialect
 use record
@@ -122,14 +113,14 @@ pub struct Reader
     // The dialect this reader was built with, unchanged.
     dialect: Dialect
     // The 1-based line the scanner is on.  Advances on a record
-    // separator AND on a newline inside a quoted field, because it is
+    // separator and on a newline inside a quoted field, because it is
     // a position in the file, not a record count.
     line: Int
-    // The 1-based byte column within that line — the column of the
-    // NEXT byte to be fed, which is `1` on a reader that has just met
-    // a line break.
+    // The 1-based byte column within that line.  It is the column of
+    // the next byte to be fed, which is `1` on a reader that has just
+    // met a line break.
     col: Int
-    // How many records have been EMITTED, header excluded.  The next
+    // How many records have been emitted, header excluded.  The next
     // `Row` gets this as its `index`.
     index: Int
     // Where the scanner is: one of the `S_*` codes above.
@@ -215,7 +206,7 @@ fn run_end(chunk: Str, from: Int, n: Int, stop1: Int, stop2: Int) -> Int
             return j
     n
 
-// One UNQUOTED field as it will be handed back: trimmed, if the
+// One unquoted field as it will be handed back, trimmed if the
 // dialect says so.
 //
 // A quoted field never comes through here.  RFC 4180 § 2.4 makes the
@@ -266,8 +257,8 @@ fn emit_record(d: Dialect, fields: [Str], row_line: Int, rows: [Row], head: [Str
                   index: index + 1, width: settled, failed: F_NONE,
                   failed_line: -1, failed_col: -1 }
 
-// Feed the next chunk; get back the reader to feed the chunk after it,
-// and every record those bytes COMPLETED.
+// Feed the next chunk.  The answer is the reader to feed the chunk
+// after it, and every record those bytes completed.
 //
 // A record is complete when a record separator has been seen outside a
 // quoted field.  A chunk that ends mid-record produces no row for it
@@ -334,7 +325,7 @@ pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
     var rows: [Row] = []
 
     // Not a counted loop: the CR state hands its byte back unconsumed,
-    // so `i` advances at the FOOT of the body rather than at the head,
+    // so `i` advances at the foot of the body rather than at the head,
     // and the first condition is the one that ends the scan early — a
     // failure is sticky, and nothing after it is read.
     let n = str.len(chunk)
@@ -539,7 +530,8 @@ pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
 // RFC 4180 § 2.2 makes the final line break optional, so a file ending
 // `bob,25` has a record in it that no `feed` has emitted — this is
 // where it comes out.  A file ending with a separator has nothing left
-// and this returns an empty list, NOT a row of one empty field.
+// and this returns an empty list rather than a row of one empty
+// field.
 //
 // `Err` when the reader is failed, including the failure a `feed`
 // recorded earlier and the one only the end of the stream can find: a
@@ -656,35 +648,35 @@ const READ_CHUNK: Int = 65536
 
 // Read a whole stream, and be charged exactly what the stream costs.
 //
-// THE LOAD-BEARING SIGNATURE OF THIS PACKAGE.  `S: Read[e]` binds the
-// effect parameter of the standard library's `Read` trait and the
-// clause is `[e]`, so the row means "whatever the impl behind `S`
-// supplies" — the call site substitutes it, a `File` charges its
-// caller `[io]`, an in-memory `Buffer` charges nothing, and this
-// package remains `core` because it has not named an effect of its
-// own (SPEC § 5.6, and `docs/publishing.md` § Design).
+// `S: Read[e]` binds the effect parameter of the standard library's
+// `Read` trait, and the clause is `[e]`.  The effect row therefore
+// means whatever the impl behind `S` supplies.  The call site
+// substitutes it, a `File` charges its caller `[io]`, an in-memory
+// `Buffer` charges nothing, and this package remains `core` because it
+// has not named an effect of its own (SPEC § 5.6, and
+// `docs/publishing.md` § Design).
 //
 // It is the same machine as `feed` and `finish` with the pump written
 // once, here, instead of once per caller.  Use `feed` when the bytes
-// arrive from somewhere this does not fit — a frame decoder, a
-// decompressor, a chunk at a time from a browser — and use this
+// arrive from somewhere this does not fit, such as a frame decoder, a
+// decompressor, or a chunk at a time from a browser.  Use this
 // otherwise.
 //
 // `Transport` carries the stream's own `IoError` through, so a caller
 // can still tell a timeout from a truncated file.
 //
-// WHERE THIS LOOP STOPS.  `Read`'s contract is that an empty result is
-// end of stream and an `Err` is a transport failure, and this stops on
-// the first empty read.  It ALSO stops, without an error, on
-// `IoClosed`: a source that reports itself closed is a source with no
-// more bytes, which is end of stream by another name — and the
-// standard library's in-memory `Buffer` reports an exhausted buffer
-// exactly that way, so a reader that treated it as a failure could not
-// read a whole document out of memory.  Every other `IoError` — a
-// timeout, a broken pipe, a permission — is `Transport`, and the
-// records read before it are discarded rather than returned as a whole
-// file: a caller who wants the prefix of a stream that failed drives
-// `feed` and keeps what it handed back.
+// The loop stops in three ways.  `Read`'s contract is that an empty
+// result is end of stream and an `Err` is a transport failure, and this
+// stops on the first empty read.  It also stops, without an error, on
+// `IoClosed`.  A source that reports itself closed is a source with no
+// more bytes, which is end of stream by another name, and the standard
+// library's in-memory `Buffer` reports an exhausted buffer exactly that
+// way.  A reader that treated it as a failure could not read a whole
+// document out of memory.  Every other `IoError`, such as a timeout, a
+// broken pipe or a permission, is `Transport`.  The records read before
+// it are discarded rather than answered as a whole file.  A caller who
+// wants the prefix of a stream that failed drives `feed` and keeps what
+// it handed back.
 //
 // ```novo
 // use reader

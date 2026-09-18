@@ -1,12 +1,11 @@
-// writer_tests.nv — the API suite for the writer.
+// writer_tests.nv — the tests of the writer.
 //
-// RED ON PURPOSE: every body is a `todo()`.  Run with `--isolate` for
-// one verdict per `@test`.
+// Run with `--isolate` for one verdict per `@test`.
 //
-// THE PROMISE UNDER MOST OF THESE CASES is the round trip — what this
-// writer emits, this package's reader reads back as the records that
-// went in, under the same dialect.  Everything else about a CSV writer
-// is a detail of when it quotes; that is the property.
+// Most of these cases assert the round trip.  What this writer emits,
+// this package's reader reads back as the records that went in, under
+// the same dialect.  Everything else about a CSV writer is a detail of
+// when it quotes.
 
 use std.test
 use writer
