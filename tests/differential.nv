@@ -48,9 +48,9 @@ fn whole(name: Str, text: Str, d: Dialect) [io]
 fn in_chunks(name: Str, text: Str, cut: Int, d: Dialect) [io]
     let (r1, first) = reader.feed_str(reader.reader(d), str.slice(text, 0, cut))
     let (r2, second) = reader.feed_str(r1, str.slice(text, cut, str.len(text)))
-    let both = list.append(first, second)
+    let both = list.concat(first, second)
     match reader.finish(r2)
-        Ok(last) => show_rows(name, Ok(list.append(both, last)))
+        Ok(last) => show_rows(name, Ok(list.concat(both, last)))
         Err(e)   => show_rows(name, Err(e))
 
 fn headerless() -> Dialect

@@ -1,6 +1,6 @@
 [package]
 name        = "csv-nv"
-version     = "0.1.3"
+version     = "0.1.4"
 description = "RFC 4180 comma-separated values, read and written without performing anything: a feed-and-drain reader the host pumps, a writer that returns bytes, a dialect value for the formats that are not quite the RFC, typed access to a record by index and by header name, and errors that name the line and the column."
 license     = "Apache-2.0"
 

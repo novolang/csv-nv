@@ -218,7 +218,9 @@ fn close_field(d: Dialect, text: Str) -> Str
     else
         text
 
-// What finishing one record produced.
+// What finishing one record produced.  `rows` holds the one row it
+// completed, or none for a header or a failure, and the caller adds it
+// to the rows it is collecting.
 //
 // A struct because the alternative is the block below written twice —
 // once for the record a `feed` completed, once for the record `finish`
@@ -235,17 +237,17 @@ struct CsvEmit
 
 // The one place a completed record becomes a `Row`, a header, or a
 // `RaggedRow`.
-fn emit_record(d: Dialect, fields: [Str], row_line: Int, rows: [Row], head: [Str], index: Int,
+fn emit_record(d: Dialect, fields: [Str], row_line: Int, head: [Str], index: Int,
                width: Int) -> CsvEmit
     if d.has_header and list.len(head) == 0
         // The first record of a `has_header` file is consumed rather
         // than emitted, and it is also what settles the width the rest
         // of the file is measured against.
-        CsvEmit { rows: rows, head: fields, index: index,
+        CsvEmit { rows: [], head: fields, index: index,
                   width: list.len(fields), failed: F_NONE,
                   failed_line: -1, failed_col: -1 }
     else if d.strict and width >= 0 and list.len(fields) != width
-        CsvEmit { rows: rows, head: head, index: index, width: width,
+        CsvEmit { rows: [], head: head, index: index, width: width,
                   failed: F_RAGGED, failed_line: row_line,
                   failed_col: list.len(fields) }
     else
@@ -253,7 +255,7 @@ fn emit_record(d: Dialect, fields: [Str], row_line: Int, rows: [Row], head: [Str
         if settled < 0
             settled = list.len(fields)
         let row = Row { fields: fields, line: row_line, index: index }
-        CsvEmit { rows: list.push(rows, row), head: head,
+        CsvEmit { rows: [row], head: head,
                   index: index + 1, width: settled, failed: F_NONE,
                   failed_line: -1, failed_col: -1 }
 
@@ -494,8 +496,8 @@ pub fn feed_str(r: Reader, chunk: Str) -> (Reader, [Row])
                 i = j - 1
 
         if complete
-            let done = emit_record(d, pending, row_line, rows, head, index, width)
-            rows = done.rows
+            let done = emit_record(d, pending, row_line, head, index, width)
+            rows = list.append(rows, done.rows)
             head = done.head
             index = done.index
             width = done.width
@@ -580,8 +582,8 @@ fn finish_clean(r: Reader) -> Result<[Row], CsvError>
     if not have
         return Ok([])
 
-    let done = emit_record(r.dialect, fields, r.row_line, [], r.head,
-                           r.index, r.width)
+    let done = emit_record(r.dialect, fields, r.row_line, r.head, r.index,
+                           r.width)
     if done.failed == F_RAGGED
         Err(RaggedRow(done.failed_line, done.width, done.failed_col))
     else
@@ -738,4 +740,4 @@ pub fn read_all<S: Read[e]>(src: S, d: Dialect) -> Result<[Row], CsvError> [e]
 // ```
 pub fn parse(text: Str, d: Dialect) -> Result<[Row], CsvError>
     let (r, rows) = feed_str(reader(d), text)
-    Ok(list.append(rows, finish(r)!))
+    Ok(list.concat(rows, finish(r)!))

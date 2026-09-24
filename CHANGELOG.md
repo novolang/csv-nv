@@ -5,6 +5,22 @@ All notable changes to csv-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.1.4 — 2026-09-24
+
+The package builds under the list rule of the next toolchain, where a
+list is one list under every name that holds it and a write into it
+goes through a `var` name.  No public signature changed, and nothing
+changes under 0.9.2.
+
+### Changed
+
+- The private step that finishes a record answers the row it completed
+  rather than pushing it onto the caller's list, and the reader adds it
+  to its own rows.  The step no longer writes into a list it was handed.
+- `parse` and the differential test join their row lists with
+  `list.concat`, which answers a new list, where they used
+  `list.append` on a list they held under a `let`.
+
 ## 0.1.3 — 2026-09-18
 
 The documentation and comments in plain prose; no signature changed.
