@@ -138,10 +138,20 @@ pub fn write_header(w: Writer, head: Header) -> (Writer, Bytes)
 //     println("${bytes.len(out)}")             // quoted second field
 // ```
 pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
+    let (next, text) = row_text(w, fields)
+    (next, bytes.from_str(text))
+
+// One record as text, terminated, and the writer that follows it.  A
+// record the writer refuses is the empty string and the writer
+// unchanged.
+//
+// Text rather than bytes, so that `write_rows` joins its records as
+// strings and converts once.
+fn row_text(w: Writer, fields: [Str]) -> (Writer, Str)
     if not usable(w.dialect)
-        return (w, bytes.from_str(""))
+        return (w, "")
     if w.dialect.strict and w.width >= 0 and list.len(fields) != w.width
-        return (w, bytes.from_str(""))
+        return (w, "")
     let d = w.dialect
     let quoted = list.map(fields, f => quote_field(d, f))
     let text = str.join(quoted, str.from_char(d.delim)) + TERMINATOR
@@ -149,7 +159,7 @@ pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
     if settled < 0
         settled = list.len(fields)
     let next = Writer { dialect: w.dialect, rows: w.rows + 1, width: settled }
-    (next, bytes.from_str(text))
+    (next, text)
 
 // Several records, as one run of bytes.
 //
@@ -168,12 +178,12 @@ pub fn write_row(w: Writer, fields: [Str]) -> (Writer, Bytes)
 // ```
 pub fn write_rows(w: Writer, rows: [[Str]]) -> (Writer, Bytes)
     var cur = w
-    var parts: [Bytes] = []
+    var parts: [Str] = []
     for row in rows
-        let (next, out) = write_row(cur, row)
+        let (next, text) = row_text(cur, row)
         cur = next
-        parts = list.push(parts, out)
-    (cur, bytes.concat(parts))
+        list.push(parts, text)
+    (cur, bytes.from_str(str.join(parts, "")))
 
 // Whether this field has to be quoted under this dialect.
 //

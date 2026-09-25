@@ -58,6 +58,12 @@ fn test_column_and_names_read_the_header() [io]
     test.assert(list.len(ns) == 2)
     test.assert(ns[0] == "name")
 
+    test.case("names is a copy, so a change to it leaves the header alone")
+    let h0 = people()
+    var mine = record.names(h0)
+    mine[0] = "changed"
+    test.assert(record.names(h0)[0] == "name")
+
     test.case("header turns a first record into one")
     let h = record.header(Row { fields: ["name", "age"], line: 1, index: 0 })
     test.assert(record.names(h)[1] == "age")

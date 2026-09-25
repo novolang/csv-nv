@@ -5,6 +5,32 @@ All notable changes to csv-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.2.0 — 2026-09-25
+
+`record.names` answers a new list holding the column names, where it
+used to answer the header's own list.  A caller that changes the answer
+no longer changes the header.  This is the one change a caller can see,
+and it is why the minor number moves.
+
+### Fixed
+
+- Feeding a reader no longer changes the reader it was handed.
+  `reader.feed_str` and `reader.feed` pushed the fields of an unfinished
+  record onto the list the old reader held, so feeding the same reader
+  a second time, or calling `reader.finish` on it and then feeding it,
+  saw fields from the other call.  Each call now works on its own copy
+  of the unfinished record.
+- The header a feed consumes belongs to the reader it answers, and the
+  reader handed in keeps the header it had.
+
+### Changed
+
+- `writer.write_rows` joins its records as text and converts them to
+  bytes once.  The bytes are the same.
+- These changes also let the package build under the next Novo
+  release, which refuses a writable list made from one a function was
+  only given to read.
+
 ## 0.1.4 — 2026-09-24
 
 The package builds under the list rule of the next toolchain, where a

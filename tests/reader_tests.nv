@@ -178,3 +178,33 @@ fn test_read_all_over_a_buffer_costs_nothing() [io]
         Ok(rows) => test.assert(list.len(rows) == 1)
         Err(_)   => test.fail("a well-formed document")
     src.drop()
+
+@test
+fn test_a_reader_fed_again_is_unchanged_by_the_first_feed() [io]
+    test.case("a feed answers a new reader and leaves the one handed in as it was")
+    let r0 = headerless()
+    let (r1, _) = reader.feed_str(r0, "a,b")
+    let (r2, _) = reader.feed_str(r0, "x\n")
+    match reader.finish(r1)
+        Ok(rows) => test.assert(list.len(rows) == 1 and list.len(rows[0].fields) == 2)
+        Err(_)   => test.fail("`a,b` is one record of two fields")
+    match reader.finish(r2)
+        Ok(rows) => test.assert(list.len(rows) == 0)
+        Err(_)   => test.fail("`x` ended with its newline")
+
+    test.case("finish leaves the unfinished record of the reader it was handed")
+    let (r3, _) = reader.feed_str(r0, "p,")
+    let _ = reader.finish(r3)
+    let (r4, rows4) = reader.feed_str(r3, "q\n")
+    test.assert(list.len(rows4) == 1 and list.len(rows4[0].fields) == 2)
+    match reader.finish(r4)
+        Ok(rows) => test.assert(list.len(rows) == 0)
+        Err(_)   => test.fail("the record was already released")
+
+    test.case("the header a feed consumes is the next reader's, not the first's")
+    let h0 = reader.reader(dialect.rfc4180())
+    let (h1, _) = reader.feed_str(h0, "name,age\n")
+    test.assert(reader.header_row(h0) == None)
+    match reader.header_row(h1)
+        Some(h) => test.assert(record.names(h)[1] == "age")
+        None    => test.fail("the first record of a header file is the header")
