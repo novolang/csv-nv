@@ -146,13 +146,11 @@ fn field_or_ragged(row: Row, i: Int) -> Result<Str, CsvError>
 //         Err(_) => println("missing")
 // ```
 pub fn field_of(row: Row, head: Header, name: Str) -> Result<Str, CsvError>
-    match column(head, name)
-        None    => Err(NoSuchColumn(name))
-        Some(i) =>
-            match field(row, i)
-                Some(v) => Ok(v)
-                None    => Err(RaggedRow(row.line, list.len(head.names),
-                                         list.len(row.fields)))
+    let Some(i) = column(head, name) else return Err(NoSuchColumn(name))
+    match field(row, i)
+        Some(v) => Ok(v)
+        None    => Err(RaggedRow(row.line, list.len(head.names),
+                                 list.len(row.fields)))
 
 // The 0-based index of a name the header has, or the `NoSuchColumn`
 // that says it has not.

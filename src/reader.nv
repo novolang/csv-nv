@@ -227,7 +227,7 @@ fn close_field(d: Dialect, text: Str) -> Str
 // releases — and two copies of "is this the header, is it the right
 // width, what number does it get" are two copies that drift.
 struct CsvEmit
-    rows: [Row]
+    var rows: [Row]
     // Whether the record was the header, consumed rather than emitted.
     // The header is then the record's own fields.
     took_head: Bool
@@ -599,7 +599,7 @@ fn finish_clean(r: Reader) -> Result<[Row], CsvError>
     if not have
         return Ok([])
 
-    let done = emit_record(r.dialect, fields, r.row_line, list.len(r.head) == 0, r.index,
+    var done = emit_record(r.dialect, fields, r.row_line, list.len(r.head) == 0, r.index,
                            r.width)
     if done.failed == F_RAGGED
         Err(RaggedRow(done.failed_line, done.width, done.failed_col))

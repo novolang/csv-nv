@@ -5,6 +5,17 @@ All notable changes to csv-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.2.1 — 2026-09-26
+
+- **The toolchain floor is 0.12.1**, raised from 0.8.9.
+  `record.field_of` takes the column index apart with `let … else`,
+  which 0.12.0 added.  0.12.0 refuses the reader with E2038 where it
+  returns itself beside a list of rows, and 0.12.1 accepts it.  No
+  signature and no answer changed.
+- `reader.finish` returns the last rows from a private field declared
+  `var`.  The toolchain refuses a list returned from a field that is not
+  `var`, because the caller may write into it.
+
 ## 0.2.0 — 2026-09-25
 
 `record.names` answers a new list holding the column names, where it
