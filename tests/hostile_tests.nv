@@ -1,0 +1,29 @@
+// hostile_tests.nv — files with many rows, many fields and long quoted
+// fields.
+
+use std.test
+use std.list
+use reader
+use dialect
+
+@test
+fn test_many_rows_and_fields_read_in_bounded_time() [io]
+    test.case("200000 rows")
+    match reader.parse("a,b,c\n".repeat(200000), dialect.rfc4180())
+        Ok(rows) => test.assert(list.len(rows) == 199999)
+        Err(_)   => test.assert(false)
+    test.case("one row of 200000 fields")
+    match reader.parse("h\n" + ",".repeat(200000) + "\n", dialect.rfc4180())
+        Ok(rows) => test.assert(list.len(rows) == 1)
+        Err(_)   => test.assert(false)
+
+@test
+fn test_a_long_quoted_field_reads_in_bounded_time() [io]
+    test.case("a megabyte of doubled quotes")
+    match reader.parse("h\n\"" + "\"\"".repeat(500000) + "\"\n", dialect.rfc4180())
+        Ok(rows) => test.assert(list.len(rows) == 1)
+        Err(_)   => test.assert(false)
+    test.case("an unterminated quote")
+    match reader.parse("\"" + "a".repeat(1000000), dialect.rfc4180())
+        Ok(_)  => test.assert(false)
+        Err(_) => test.assert(true)
