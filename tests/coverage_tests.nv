@@ -1,0 +1,261 @@
+// coverage_tests.nv — the cases that the other test files leave to the
+// error messages, the dialect refusals, the escape and comment states
+// of the scanner, the by-name reads that miss, and a stream that fails.
+
+use std.test
+use reader
+use record
+use dialect
+use writer
+use csverror
+
+struct Dead
+    kind: Int
+
+impl Read[] for Dead
+    fn read(self, n: Int) -> Result<Bytes, IoError>
+        if self.kind == 0
+            Err(IoClosed)
+        else if self.kind == 1
+            Err(IoBrokenPipe)
+        else
+            Ok(bytes.zeros(0))
+
+fn rows_of(text: Str, d: Dialect) -> [Row]
+    match reader.parse(text, d)
+        Ok(rows) => rows
+        Err(_)   => []
+
+fn error_of(text: Str, d: Dialect) -> ?CsvError
+    match reader.parse(text, d)
+        Ok(_)  => None
+        Err(e) => Some(e)
+
+fn headerless() -> Dialect
+    dialect.with_header(dialect.rfc4180(), false)
+
+@test
+fn test_every_error_names_itself() [io]
+    test.case("message")
+    test.assert(UnterminatedQuote(1, 2).message() == "1:2: a quoted field was never closed")
+    test.assert(BareQuote(1, 2).message() == "1:2: a quote inside an unquoted field")
+    test.assert(RaggedRow(3, 4, 5).message() == "3: a record of 5 field(s) where the file is 4 wide")
+    test.assert(FieldTooLong(1, 2, 9).message() == "1:2: a field longer than the 9-byte bound")
+    test.assert(NoSuchColumn("x").message() == "no column named `x`")
+    test.assert(NotAnInt(1, 2, "q").message() == "1:2: `q` is not an integer")
+    test.assert(NotAFloat(1, 2, "q").message() == "1:2: `q` is not a number")
+    test.assert(NotABool(1, 2, "q").message() == "1:2: `q` is not a boolean")
+    test.assert(BadDialect("w").message() == "this dialect cannot be read: w")
+    test.assert(Transport(IoClosed).message().len() > 0)
+
+    test.case("line_of and col_of")
+    test.assert(csverror.line_of(UnterminatedQuote(7, 8)) == 7)
+    test.assert(csverror.line_of(BareQuote(7, 8)) == 7)
+    test.assert(csverror.line_of(RaggedRow(7, 1, 2)) == 7)
+    test.assert(csverror.line_of(FieldTooLong(7, 8, 9)) == 7)
+    test.assert(csverror.line_of(NotAnInt(7, 8, "")) == 7)
+    test.assert(csverror.line_of(NotAFloat(7, 8, "")) == 7)
+    test.assert(csverror.line_of(NotABool(7, 8, "")) == 7)
+    test.assert(csverror.line_of(NoSuchColumn("")) == -1)
+    test.assert(csverror.line_of(Transport(IoClosed)) == -1)
+    test.assert(csverror.col_of(UnterminatedQuote(7, 8)) == 8)
+    test.assert(csverror.col_of(BareQuote(7, 8)) == 8)
+    test.assert(csverror.col_of(FieldTooLong(7, 8, 9)) == 8)
+    test.assert(csverror.col_of(NotAnInt(7, 8, "")) == 8)
+    test.assert(csverror.col_of(NotAFloat(7, 8, "")) == 8)
+    test.assert(csverror.col_of(NotABool(7, 8, "")) == 8)
+    test.assert(csverror.col_of(RaggedRow(1, 2, 3)) == -1)
+    test.assert(csverror.col_of(NoSuchColumn("")) == -1)
+    test.assert(csverror.col_of(BadDialect("")) == -1)
+    test.assert(csverror.col_of(Transport(IoClosed)) == -1)
+
+fn refused(d: Dialect) -> Bool
+    match dialect.check(d)
+        Some(_) => true
+        None    => false
+
+@test
+fn test_check_names_each_ambiguity() [io]
+    let b = dialect.rfc4180()
+    test.case("each field out of range or equal to another is refused")
+    test.assert(refused(dialect.with_quote(b, 300)))
+    test.assert(refused(dialect.with_escape(b, 300)))
+    test.assert(refused(dialect.with_comment(b, 300)))
+    test.assert(refused(dialect.with_escape(b, 0x2C)))
+    test.assert(refused(dialect.with_escape(b, 0x22)))
+    test.assert(refused(dialect.with_comment(b, 0x2C)))
+
+@test
+fn test_trim_comment_escape_and_strict_states() [io]
+    test.case("trim removes the spaces of an unquoted field only")
+    let t = dialect.with_trim(headerless(), true)
+    let r1 = rows_of(" a , \" b \" \n", t)
+    test.assert(r1[0].fields[0] == "a")
+
+    test.case("a comment line is skipped, with LF and with CRLF")
+    let c = dialect.with_comment(headerless(), 0x23)
+    let r2 = rows_of("#one\na,b\r\n#two\r\nc,d\n", c)
+    test.assert(list.len(r2) == 2)
+    test.assert(r2[1].fields[0] == "c")
+    test.assert(list.len(rows_of("#x y z", c)) == 0)
+
+    test.case("an escape byte keeps the quote, the newline and itself as data")
+    let e = dialect.with_escape(headerless(), 0x5C)
+    let r3 = rows_of("\"a\\\"b\\\\c\\\nd\",z\n", e)
+    test.assert(r3[0].fields[0] == "a\"b\\c\nd")
+
+    test.case("a quoted field holds LF and CR as data")
+    let r4 = rows_of("\"a\nb\rc\",z\n", headerless())
+    test.assert(r4[0].fields[0] == "a\nb\rc")
+
+    test.case("strict refuses a quote inside an unquoted field")
+    let s = dialect.with_strict(headerless(), true)
+    match error_of("ab\"c,d\n", s)
+        Some(BareQuote(l, c2)) =>
+            test.assert(l == 1)
+            test.assert(c2 == 3)
+        _ => test.fail("expected a bare quote")
+
+    test.case("strict refuses text after a closing quote")
+    match error_of("\"ab\"c,d\n", s)
+        Some(BareQuote(_, _)) => test.assert(true)
+        _                     => test.fail("expected a bare quote")
+
+    test.case("lenient keeps both as data")
+    test.assert(rows_of("ab\"c,d\n", headerless())[0].fields[0] == "ab\"c")
+    test.assert(rows_of("\"ab\"c,d\n", headerless())[0].fields[0] == "abc")
+
+    test.case("an empty field before CR, and a lone CR record end")
+    let r5 = rows_of("a,\r\nb,c\r\n", headerless())
+    test.assert(list.len(r5) == 2)
+    test.assert(r5[0].fields[1] == "")
+    test.assert(list.len(rows_of("a,\rb,c\r", headerless())) == 2)
+
+@test
+fn test_the_reader_reports_what_it_stopped_at() [io]
+    test.case("a field past the bound")
+    let m = dialect.with_max_field(headerless(), 3)
+    match error_of("abcdef,g\n", m)
+        Some(FieldTooLong(l, _, cap)) =>
+            test.assert(l == 1)
+            test.assert(cap == 3)
+        _ => test.fail("expected a field bound")
+
+    test.case("a ragged record under strict")
+    let s = dialect.with_strict(dialect.rfc4180(), true)
+    match error_of("a,b\nc\n", s)
+        Some(RaggedRow(l, want, got)) =>
+            test.assert(l == 2)
+            test.assert(want == 2)
+            test.assert(got == 1)
+        _ => test.fail("expected a ragged row")
+    match error_of("a,b\nc,d\ne", s)
+        Some(RaggedRow(_, _, _)) => test.assert(true)
+        _                        => test.fail("expected a ragged row at the end")
+
+    test.case("an unterminated quote at the end of the input")
+    match error_of("a,\"b", headerless())
+        Some(UnterminatedQuote(_, _)) => test.assert(true)
+        _                             => test.fail("expected an unterminated quote")
+
+    test.case("a bad dialect is reported by error and by finish")
+    let bad = reader.reader(dialect.with_delim(headerless(), 300))
+    match reader.error(bad)
+        Some(BadDialect(_)) => test.assert(true)
+        _                   => test.fail("expected a bad dialect")
+    let (r2, got) = reader.feed_str(bad, "a,b\n")
+    test.assert(list.len(got) == 0)
+    match reader.finish(r2)
+        Err(BadDialect(_)) => test.assert(true)
+        _                  => test.fail("expected a bad dialect from finish")
+
+    test.case("a record that ends without a terminator, after a quote and after a delimiter")
+    test.assert(list.len(rows_of("\"a\"", headerless())) == 1)
+    test.assert(rows_of("a,", headerless())[0].fields[1] == "")
+    test.assert(list.len(rows_of("", headerless())) == 0)
+
+    test.case("a failed reader ignores later input")
+    let (r3, _) = reader.feed_str(reader.reader(m), "abcdef,g\n")
+    let (_, later) = reader.feed_str(r3, "x,y\n")
+    test.assert(list.len(later) == 0)
+
+@test
+fn test_read_all_over_a_stream_that_fails() [io]
+    test.case("a closed stream ends the input")
+    match reader.read_all(Dead { kind: 0 }, headerless())
+        Ok(rows) => test.assert(list.len(rows) == 0)
+        Err(_)   => test.fail("a closed stream is the end of the input")
+
+    test.case("an empty chunk ends the input")
+    match reader.read_all(Dead { kind: 2 }, headerless())
+        Ok(rows) => test.assert(list.len(rows) == 0)
+        Err(_)   => test.fail("an empty chunk is the end of the input")
+
+    test.case("any other failure is a transport error")
+    match reader.read_all(Dead { kind: 1 }, headerless())
+        Err(Transport(_)) => test.assert(true)
+        _                 => test.fail("expected a transport error")
+
+@test
+fn test_the_typed_reads_that_miss() [io]
+    let head = Header { names: ["n", "f"] }
+    let rows = rows_of("a,b\n1,2.5\n+3,1e\nx,-\n", dialect.rfc4180())
+    test.case("an index past the record")
+    match record.int_at(rows[0], 5)
+        Err(RaggedRow(_, _, _)) => test.assert(true)
+        _                       => test.fail("expected a ragged row")
+
+    test.case("a name that is not in the header")
+    match record.field_of(rows[0], head, "zz")
+        Err(NoSuchColumn(_)) => test.assert(true)
+        _                    => test.fail("expected no such column")
+    match record.int_of(rows[0], head, "zz")
+        Err(NoSuchColumn(_)) => test.assert(true)
+        _                    => test.fail("expected no such column")
+    match record.float_of(rows[0], head, "zz")
+        Err(NoSuchColumn(_)) => test.assert(true)
+        _                    => test.fail("expected no such column")
+    match record.bool_of(rows[0], head, "zz")
+        Err(NoSuchColumn(_)) => test.assert(true)
+        _                    => test.fail("expected no such column")
+
+    test.case("a signed integer, and a sign with nothing after it")
+    test.assert(record.int_at(rows[1], 0) == Ok(3))
+    match record.int_at(rows[2], 1)
+        Err(NotAnInt(_, _, _)) => test.assert(true)
+        _                      => test.fail("expected not an int")
+    match record.float_at(rows[2], 1)
+        Err(NotAFloat(_, _, _)) => test.assert(true)
+        _                       => test.fail("expected not a float")
+
+    test.case("text that starts like a number and is not one")
+    match record.float_at(rows[1], 1)
+        Err(NotAFloat(_, _, _)) => test.assert(true)
+        _                       => test.fail("expected not a float")
+    match record.float_at(rows[2], 0)
+        Err(NotAFloat(_, _, _)) => test.assert(true)
+        _                       => test.fail("expected not a float")
+
+@test
+fn test_the_writer_refuses_and_escapes() [io]
+    test.case("a header after a record writes nothing")
+    let w = writer.writer(dialect.rfc4180())
+    let (w2, _) = writer.write_row(w, ["a", "b"])
+    let (_, none) = writer.write_header(w2, Header { names: ["a", "b"] })
+    test.assert(bytes.len(none) == 0)
+
+    test.case("a dialect that cannot be written refuses the record")
+    let bad = writer.writer(dialect.with_delim(dialect.rfc4180(), 300))
+    let (_, refused_out) = writer.write_row(bad, ["a"])
+    test.assert(bytes.len(refused_out) == 0)
+
+    test.case("a strict writer refuses a record of another width")
+    let s = writer.writer(dialect.with_strict(dialect.rfc4180(), true))
+    let (s2, first) = writer.write_row(s, ["a", "b"])
+    test.assert(bytes.len(first) > 0)
+    let (_, wrong) = writer.write_row(s2, ["a"])
+    test.assert(bytes.len(wrong) == 0)
+
+    test.case("the escape byte inside a quoted field is escaped")
+    let e = dialect.with_escape(dialect.rfc4180(), 0x5C)
+    test.assert(writer.quote_field(e, "a,\\b") == "\"a,\\\\b\"")
