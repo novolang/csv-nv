@@ -58,6 +58,7 @@
 
 use dialect
 use record
+use csverror
 
 // The two bytes that end a line, named once.
 const LF: Int = 10

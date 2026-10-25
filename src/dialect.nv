@@ -28,6 +28,8 @@
 
 // The largest byte value, and the sentinel one below the smallest.
 // Spelled once so that `check`'s four range tests read as one rule.
+use csverror
+
 const BYTE_MAX: Int = 255
 const NO_BYTE: Int = -1
 

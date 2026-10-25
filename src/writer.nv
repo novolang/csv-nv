@@ -32,6 +32,7 @@
 // is visible as a `rows` that did not move.
 
 use dialect
+use record
 
 // The two bytes RFC 4180 § 2.1 terminates a record with, and the
 // string they spell.  They are not a dialect field.  A writer whose

@@ -31,6 +31,8 @@
 
 // The bytes this module names, spelled once so that the scans below
 // read as rules rather than as arithmetic.
+use csverror
+
 const PLUS: Int = 43
 const MINUS: Int = 45
 const DIGIT_0: Int = 48

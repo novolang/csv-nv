@@ -5,6 +5,10 @@ All notable changes to csv-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.2.2 — 2026-10-25
+
+A file that names a sibling module's type, function or constant now has the `use` line for that module (E2033, E2003).  No signature and no behaviour changed.
+
 ## 0.2.1 — 2026-09-26
 
 - **The toolchain floor is 0.12.1**, raised from 0.8.9.
