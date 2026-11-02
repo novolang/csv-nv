@@ -5,8 +5,8 @@
 // binary each print the whole corpus, and the two outputs are compared
 // byte for byte:
 //
-//     novo run --interp tests/differential.nv > a.txt
-//     novo run          tests/differential.nv > b.txt
+//     novo run --interp tests/differential_tests.nv > a.txt
+//     novo run          tests/differential_tests.nv > b.txt
 //     cmp a.txt b.txt
 //
 // A CSV reader is a byte-at-a-time machine over a `Str`, and the two
@@ -139,6 +139,16 @@ fn typed_reads() [io]
         Err(e) => println("    missing err=${e.message()}")
 
 fn main() [io]
+    corpus()
+    round_trip()
+    typed_reads()
+
+// The suite form of the program above: the corpus runs to the end on
+// whichever leg `novo test` uses, and none of its calls refuses.  The
+// byte-for-byte comparison of the two legs stays the command in the
+// header, because a suite sees one leg only.
+@test
+fn test_the_corpus_runs_to_the_end() [io]
     corpus()
     round_trip()
     typed_reads()

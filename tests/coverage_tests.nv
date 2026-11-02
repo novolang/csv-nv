@@ -114,7 +114,7 @@ fn test_trim_comment_escape_and_strict_states() [io]
         Some(BareQuote(l, c2)) =>
             test.assert(l == 1)
             test.assert(c2 == 3)
-        _ => test.fail("expected a bare quote")
+        _                      => test.fail("expected a bare quote")
 
     test.case("strict refuses text after a closing quote")
     match error_of("\"ab\"c,d\n", s)
@@ -139,7 +139,7 @@ fn test_the_reader_reports_what_it_stopped_at() [io]
         Some(FieldTooLong(l, _, cap)) =>
             test.assert(l == 1)
             test.assert(cap == 3)
-        _ => test.fail("expected a field bound")
+        _                             => test.fail("expected a field bound")
 
     test.case("a ragged record under strict")
     let s = dialect.with_strict(dialect.rfc4180(), true)
@@ -148,7 +148,7 @@ fn test_the_reader_reports_what_it_stopped_at() [io]
             test.assert(l == 2)
             test.assert(want == 2)
             test.assert(got == 1)
-        _ => test.fail("expected a ragged row")
+        _                             => test.fail("expected a ragged row")
     match error_of("a,b\nc,d\ne", s)
         Some(RaggedRow(_, _, _)) => test.assert(true)
         _                        => test.fail("expected a ragged row at the end")

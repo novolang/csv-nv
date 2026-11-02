@@ -279,13 +279,13 @@ carries the position the module comment promises, and that reading the
 writer's output under the same dialect gives back the records that went
 in.
 
-`tests/differential.nv` is a program rather than a suite. It prints a
+`tests/differential_tests.nv` is a suite whose `main` is also a program. It prints a
 corpus of thirty documents, so that the interpreter and the compiled
 binary can be compared byte for byte:
 
 ```bash
-novo run --interp tests/differential.nv > a.txt
-novo run          tests/differential.nv > b.txt
+novo run --interp tests/differential_tests.nv > a.txt
+novo run          tests/differential_tests.nv > b.txt
 cmp a.txt b.txt
 ```
 
