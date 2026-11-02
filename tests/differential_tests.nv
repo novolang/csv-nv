@@ -143,12 +143,10 @@ fn main() [io]
     round_trip()
     typed_reads()
 
-// The suite form of the program above: the corpus runs to the end on
+// The suite form of the program above: `main` runs to the end on
 // whichever leg `novo test` uses, and none of its calls refuses.  The
 // byte-for-byte comparison of the two legs stays the command in the
 // header, because a suite sees one leg only.
 @test
 fn test_the_corpus_runs_to_the_end() [io]
-    corpus()
-    round_trip()
-    typed_reads()
+    main()
