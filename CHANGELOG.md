@@ -5,6 +5,10 @@ All notable changes to csv-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.2.4 — 2026-11-03
+
+This release requires novo 0.23.0 or later.
+
 ## 0.2.3 — 2026-10-25
 
 The tests now cover the error paths and the refusal arms that the coverage gate reports, and a region that cannot run carries a `cov: skip` marker with its reason.  No signature and no behaviour changed.
